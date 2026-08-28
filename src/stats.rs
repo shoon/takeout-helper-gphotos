@@ -42,6 +42,10 @@ pub struct ProcessingStats {
     // --- EXIF phase ---
     /// Files that received embedded EXIF metadata.
     pub exif_written: usize,
+    /// Successful EXIF writes that used a fresh block because pre-existing
+    /// EXIF was unreadable. Sidecar tags were written, but old unparsed tags
+    /// may not have been preserved.
+    pub exif_fresh_blocks: usize,
     /// Videos whose QuickTime `mvhd` creation/modification times were patched.
     pub video_dates_written: usize,
     /// Files that could only receive a corrected modification time.
@@ -184,6 +188,12 @@ pub fn generate_summary(stats: &ProcessingStats) {
         println!("  skipped (dry run)         : no file was modified");
     } else {
         println!("  EXIF embedded             : {}", stats.exif_written);
+        if stats.exif_fresh_blocks > 0 {
+            println!(
+                "  fresh EXIF blocks         : {}  (old EXIF unreadable; old tags may not be preserved)",
+                stats.exif_fresh_blocks
+            );
+        }
         println!(
             "  video dates patched       : {}  (MP4/MOV mvhd creation time)",
             stats.video_dates_written

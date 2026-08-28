@@ -211,6 +211,80 @@ fn verify_passes_on_a_clean_run() {
     assert_eq!(outcome.exit_code(), 0);
 }
 
+/// Different media paths can legitimately contain the same bytes. Both must
+/// remain in the manifest and be verified independently.
+#[test]
+fn verify_checks_each_path_when_files_have_identical_content() {
+    let mut entries = takeout_entries("Photos from 2021", "IMG_0001.mp4", "identical media bytes");
+    entries.extend(takeout_entries(
+        "Photos from 2021",
+        "IMG_0002.mp4",
+        "identical media bytes",
+    ));
+    let fixture = Fixture::new(entries);
+
+    let outcome = fixture.run(AppConfig {
+        verify: true,
+        ..fixture.config()
+    });
+
+    let stats = outcome.stats();
+    assert_eq!(stats.files_organized, 2);
+    assert_eq!(stats.verified, 2);
+    assert_eq!(stats.verify_failures(), 0);
+    assert_eq!(outcome.exit_code(), 0);
+}
+
+/// Version 1 retained only one path per content hash. A forced pass must reuse
+/// existing files while rebuilding complete version 2 verification records.
+#[test]
+fn force_rebuilds_a_legacy_manifest_with_identical_content_paths() {
+    let mut entries = takeout_entries("Photos from 2021", "IMG_0001.mp4", "same bytes");
+    entries.extend(takeout_entries(
+        "Photos from 2021",
+        "IMG_0002.mp4",
+        "same bytes",
+    ));
+    let fixture = Fixture::new(entries);
+    assert_eq!(fixture.run(fixture.config()).stats().files_organized, 2);
+
+    let manifest_path = fixture.output.join(MANIFEST_FILE_NAME);
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    let retained = &current["entries"][0];
+    let hash = retained["hash"].as_str().unwrap();
+    let relative_path = PathBuf::from(retained["path"].as_str().unwrap());
+    let mut legacy_entries = serde_json::Map::new();
+    legacy_entries.insert(
+        hash.to_string(),
+        serde_json::json!({
+            "hash": hash,
+            "output_path": fixture.output.join(relative_path),
+            "processed_at": retained["processed_at"]
+        }),
+    );
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&serde_json::json!({ "entries": legacy_entries })).unwrap(),
+    )
+    .unwrap();
+
+    let rebuilt = fixture.run(AppConfig {
+        force: true,
+        verify: true,
+        ..fixture.config()
+    });
+
+    assert_eq!(rebuilt.stats().duplicates_skipped, 2);
+    assert_eq!(rebuilt.stats().verified, 2);
+    assert_eq!(rebuilt.exit_code(), 0);
+
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    assert_eq!(saved["version"], 2);
+    assert_eq!(saved["entries"].as_array().unwrap().len(), 2);
+}
+
 /// A file that changed under us must fail verification, land in the report and
 /// change the exit code. Silence here would mean claiming a library is intact
 /// when it is not.

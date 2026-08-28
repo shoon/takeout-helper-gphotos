@@ -597,14 +597,10 @@ pub fn organize_media_files_with_options(
 
     // Create a progress bar for file organization
     let organize_pb = ProgressBar::new(media_metadata_pairs.len() as u64);
-    let label = if options.dry_run {
-        "Planning file organization (dry run)..."
-    } else {
-        "Organizing files..."
-    };
+    let label = if options.dry_run { "Plan" } else { "Organize" };
     organize_pb.set_style(
         ProgressStyle::default_bar()
-            .template(&format!("{{spinner:.green}} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} ({{eta}}) - {}", label))?
+            .template(&format!("  {{spinner:.green}} {} [{{bar:20.cyan/blue}}] files {{pos}}/{{len}} | {{elapsed_precise}} | ETA {{eta}}", label))?
             .progress_chars("#>-")
     );
 
@@ -752,17 +748,14 @@ pub fn organize_one(
         match hash_file_cached(&source, Some(context)) {
             Ok(hash) => {
                 let hex = crate::dedup::hash_to_hex(&hash);
-                if let Some(destination) = manifest.resume_destination(&hex) {
+                if let Some(destination) = manifest.resume_destination(output_path, &hex) {
                     debug!(
                         "Resuming: {} is already organized at {}",
                         source.display(),
                         destination.display()
                     );
-                    let mut outcome = FileOutcome::skipped(
-                        source,
-                        destination.to_path_buf(),
-                        Disposition::Resumed,
-                    );
+                    let mut outcome =
+                        FileOutcome::skipped(source, destination, Disposition::Resumed);
                     outcome.hash = Some(hex);
                     return Ok(outcome);
                 }

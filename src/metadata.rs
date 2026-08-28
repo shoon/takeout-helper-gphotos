@@ -722,7 +722,7 @@ fn find_media_files_counted(
     discovery_pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", ""])
-            .template("{spinner:.green} Discovering media files... {msg}")?,
+            .template("  {spinner:.green} Media discovery | {msg}")?,
     );
     discovery_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -778,7 +778,7 @@ pub fn pair_media_with_metadata(
     let pairing_pb = ProgressBar::new(media_files.len() as u64);
     pairing_pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) - Pairing media with metadata...")?
+            .template("  {spinner:.green} Pair [{bar:20.cyan/blue}] files {pos}/{len} | {elapsed_precise} | ETA {eta}")?
             .progress_chars("#>-")
     );
 
@@ -841,7 +841,7 @@ pub fn pair_media_with_metadata(
     if !orphans.is_empty() {
         warn!("{} JSON sidecars matched no media file", orphans.len());
         for path in &orphans {
-            debug!("Orphan sidecar: {}", path.display());
+            warn!("Orphan JSON sidecar: {}", path.display());
         }
     }
     stats.orphan_sidecars += orphans.len();

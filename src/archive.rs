@@ -489,7 +489,7 @@ pub fn find_archive_files(
     discovery_pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", ""])
-            .template("{spinner:.green} Discovering archive files... {msg}")?,
+            .template("  {spinner:.green} Archive discovery | {msg}")?,
     );
     discovery_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -538,7 +538,7 @@ pub fn find_archive_files(
 fn standalone_progress_bar(label: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     if let Ok(style) = ProgressStyle::default_spinner()
-        .template("{spinner:.green} [{elapsed_precise}] {pos} entries - Extracting {msg}")
+        .template("  {spinner:.green} Extracting {msg} | {pos} entries | {elapsed_precise} elapsed")
     {
         pb.set_style(style);
     }
@@ -937,7 +937,7 @@ pub fn extract_archives(
     let multi = MultiProgress::new();
     let overall = multi.add(ProgressBar::new(archive_files.len() as u64));
     if let Ok(style) = ProgressStyle::default_bar().template(
-        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} archives extracted",
+        "  {spinner:.green} Archives [{bar:20.cyan/blue}] {pos}/{len} | {elapsed_precise} | ETA {eta}",
     ) {
         overall.set_style(style.progress_chars("#>-"));
     }
@@ -946,9 +946,9 @@ pub fn extract_archives(
         .into_par_iter()
         .map(|archive_file| {
             let pb = multi.add(ProgressBar::new_spinner());
-            if let Ok(style) =
-                ProgressStyle::default_spinner().template("{spinner:.green} {pos} entries - {msg}")
-            {
+            if let Ok(style) = ProgressStyle::default_spinner().template(
+                "  {spinner:.green} Extracting {msg} | {pos} entries | {elapsed_precise} elapsed",
+            ) {
                 pb.set_style(style);
             }
             pb.set_message(

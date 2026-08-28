@@ -42,9 +42,9 @@ cargo build --locked --release
 cargo audit
 ```
 
-The full suite currently contains 182 tests after the oversized-sidecar and
-Windows timestamp regressions are included. Do not hard-code that number in
-automation; Cargo's exit status is authoritative.
+The full suite includes unit, integration, archive-safety, metadata, resume,
+and end-to-end pipeline tests. Cargo's exit status is authoritative, so the
+test count is not hard-coded in automation or documentation.
 
 To verify the minimum supported toolchain:
 

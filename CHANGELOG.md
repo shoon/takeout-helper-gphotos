@@ -5,6 +5,17 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+- Show preparation, archive discovery, extraction, media discovery, sidecar
+  pairing, Live Photo indexing, metadata writing, organization, verification,
+  and finalization in the progress display.
+- Show per-file verification progress while the finished library is re-hashed.
+- Record every organized media path in the resume manifest, even when multiple
+  files have identical content, and store paths relative to the output library.
+- Load existing version 1 manifests while writing the corrected version 2
+  format.
+- Identify orphan sidecars and successful fresh EXIF replacements more clearly
+  in warnings and the run summary.
+
 ## [0.1.0] - 2026-08-28
 
 Initial public release.

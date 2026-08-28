@@ -92,6 +92,10 @@ pub enum ExifWriteOutcome {
 pub struct ExifBatchSummary {
     /// Files that received embedded EXIF metadata.
     pub exif_written: usize,
+    /// Successful EXIF writes that started with a fresh block because the
+    /// file's pre-existing EXIF could not be parsed. Sidecar-derived tags were
+    /// written, but unknown tags from the unreadable block may not survive.
+    pub fresh_exif_blocks: usize,
     /// Videos whose QuickTime `mvhd` creation/modification times were patched.
     /// These also had their filesystem mtime corrected.
     pub video_dates_written: usize,
@@ -118,7 +122,7 @@ impl ExifBatchSummary {
 
 /// Per-item result, aggregated into [`ExifBatchSummary`] after the parallel pass.
 enum ItemOutcome {
-    ExifWritten,
+    ExifWritten { fresh_block: bool },
     VideoDateWritten,
     MtimeOnly,
     SkippedNoMetadata,
@@ -154,7 +158,7 @@ pub fn write_exif_metadata_batch_with_tz(
     let exif_pb = ProgressBar::new(media_metadata_pairs.len() as u64);
     exif_pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) - Writing EXIF metadata...")?
+            .template("  {spinner:.green} EXIF [{bar:20.cyan/blue}] files {pos}/{len} | {elapsed_precise} | ETA {eta}")?
             .progress_chars("#>-")
     );
 
@@ -170,10 +174,14 @@ pub fn write_exif_metadata_batch_with_tz(
             let outcome = match pair {
                 MediaMetadataPair::WithMetadata(path, metadata, _) => {
                     let tz = resolve_timezone(metadata, tz_override);
-                    match write_metadata_to_file_with_tz(path, metadata, tz) {
-                        Ok(ExifWriteOutcome::ExifWritten) => ItemOutcome::ExifWritten,
-                        Ok(ExifWriteOutcome::VideoDateWritten) => ItemOutcome::VideoDateWritten,
-                        Ok(ExifWriteOutcome::MtimeOnly) => ItemOutcome::MtimeOnly,
+                    match write_metadata_to_file_detailed(path, metadata, tz) {
+                        Ok(result) => match result.outcome {
+                            ExifWriteOutcome::ExifWritten => ItemOutcome::ExifWritten {
+                                fresh_block: result.fresh_exif_block,
+                            },
+                            ExifWriteOutcome::VideoDateWritten => ItemOutcome::VideoDateWritten,
+                            ExifWriteOutcome::MtimeOnly => ItemOutcome::MtimeOnly,
+                        },
                         Err(e) => {
                             error!(
                                 "Failed to write EXIF metadata for {}: {}",
@@ -198,7 +206,10 @@ pub fn write_exif_metadata_batch_with_tz(
     let mut summary = ExifBatchSummary::default();
     for outcome in outcomes {
         match outcome {
-            ItemOutcome::ExifWritten => summary.exif_written += 1,
+            ItemOutcome::ExifWritten { fresh_block } => {
+                summary.exif_written += 1;
+                summary.fresh_exif_blocks += usize::from(fresh_block);
+            }
             ItemOutcome::VideoDateWritten => summary.video_dates_written += 1,
             ItemOutcome::MtimeOnly => summary.mtime_only += 1,
             ItemOutcome::SkippedNoMetadata => summary.skipped_no_metadata += 1,
@@ -219,8 +230,9 @@ pub fn write_exif_metadata_batch_with_tz(
     exif_pb.finish_with_message("EXIF metadata writing completed");
 
     info!(
-        "EXIF phase: {} written, {} video dates written, {} mtime-only, {} without metadata, {} failed",
+        "EXIF phase: {} written ({} fresh blocks after unreadable existing EXIF), {} video dates written, {} mtime-only, {} without metadata, {} failed",
         summary.exif_written,
+        summary.fresh_exif_blocks,
         summary.video_dates_written,
         summary.mtime_only,
         summary.skipped_no_metadata,
@@ -275,6 +287,22 @@ pub fn write_metadata_to_file_with_tz(
     metadata: &PhotoMetadata,
     tz: Option<Tz>,
 ) -> Result<ExifWriteOutcome, ExifError> {
+    write_metadata_to_file_detailed(media_path, metadata, tz).map(|result| result.outcome)
+}
+
+/// Internal result that keeps successful metadata writes compatible with the
+/// public outcome while recording whether unreadable pre-existing EXIF had to
+/// be replaced with a fresh block.
+struct DetailedWriteOutcome {
+    outcome: ExifWriteOutcome,
+    fresh_exif_block: bool,
+}
+
+fn write_metadata_to_file_detailed(
+    media_path: &Path,
+    metadata: &PhotoMetadata,
+    tz: Option<Tz>,
+) -> Result<DetailedWriteOutcome, ExifError> {
     // Check if the file exists
     if !media_path.exists() {
         return Err(ExifError::Io(std::io::Error::new(
@@ -284,14 +312,23 @@ pub fn write_metadata_to_file_with_tz(
     }
 
     let mut outcome = ExifWriteOutcome::MtimeOnly;
+    let mut fresh_exif_block = false;
     let mut exif_error: Option<ExifError> = None;
 
     if is_supported_format(media_path) {
         match build_exif_metadata(media_path, metadata, tz) {
-            Some(exif_metadata) => match write_exif_atomically(media_path, &exif_metadata) {
+            Some(built) => match write_exif_atomically(media_path, &built.metadata) {
                 Ok(()) => {
                     debug!("Successfully wrote EXIF data for {}", media_path.display());
                     outcome = ExifWriteOutcome::ExifWritten;
+                    if let Some(load_error) = built.unreadable_existing_exif {
+                        fresh_exif_block = true;
+                        warn!(
+                            "Embedded sidecar-derived EXIF in {} using a fresh EXIF block because its existing EXIF could not be read: {}. Existing unparsed tags may not have been preserved",
+                            media_path.display(),
+                            load_error
+                        );
+                    }
                 }
                 Err(e) => exif_error = Some(e),
             },
@@ -326,7 +363,10 @@ pub fn write_metadata_to_file_with_tz(
 
     match exif_error {
         Some(e) => Err(e),
-        None => Ok(outcome),
+        None => Ok(DetailedWriteOutcome {
+            outcome,
+            fresh_exif_block,
+        }),
     }
 }
 
@@ -341,11 +381,16 @@ fn photo_taken_unix(metadata: &PhotoMetadata) -> Option<i64> {
 
 /// Build the in-memory EXIF metadata for a file, merging over whatever the file
 /// already carries. Returns `None` when there is nothing worth writing.
+struct BuiltExifMetadata {
+    metadata: Metadata,
+    unreadable_existing_exif: Option<String>,
+}
+
 fn build_exif_metadata(
     media_path: &Path,
     metadata: &PhotoMetadata,
     tz: Option<Tz>,
-) -> Option<Metadata> {
+) -> Option<BuiltExifMetadata> {
     let datetime = metadata
         .photo_taken_time
         .as_ref()
@@ -365,23 +410,23 @@ fn build_exif_metadata(
     }
 
     // Start from the file's existing EXIF so unrelated tags survive.
-    let mut exif_metadata = match Metadata::new_from_path(media_path) {
-        Ok(existing) => existing,
+    let (mut exif_metadata, unreadable_existing_exif) = match Metadata::new_from_path(media_path) {
+        Ok(existing) => (existing, None),
         Err(e) => {
             if is_critical_exif_error(&e) {
-                warn!(
-                    "Failed to load EXIF metadata for {}: {}",
-                    media_path.display(),
-                    e
-                );
+                // Do not warn yet. The atomic write below may fail, in which
+                // case the original is untouched and this is only context for
+                // the real write error. A preservation warning is emitted only
+                // after fresh sidecar-derived EXIF was successfully embedded.
+                (Metadata::new(), Some(e.to_string()))
             } else {
                 debug!(
                     "No pre-existing EXIF metadata for {}: {}",
                     media_path.display(),
                     e
                 );
+                (Metadata::new(), None)
             }
-            Metadata::new()
         }
     };
 
@@ -419,7 +464,10 @@ fn build_exif_metadata(
         }
     }
 
-    Some(exif_metadata)
+    Some(BuiltExifMetadata {
+        metadata: exif_metadata,
+        unreadable_existing_exif,
+    })
 }
 
 /// Extract usable GPS coordinates, preferring `geoDataExif` over `geoData`.
@@ -1359,6 +1407,43 @@ mod tests {
             Some("E")
         );
         assert_eq!(mtime_secs(&path), TEST_TIMESTAMP.parse::<i64>().unwrap());
+    }
+
+    /// Unreadable old EXIF must not turn a successful fresh write into a
+    /// failure. The batch reports the preservation caveat separately while
+    /// still counting the sidecar-derived EXIF as embedded.
+    #[test]
+    fn test_unreadable_existing_exif_is_counted_as_fresh_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("bad-existing-exif.jpg");
+
+        // Insert an EXIF APP1 segment with invalid TIFF endian bytes (`PI`)
+        // after the JPEG start marker. The underlying image remains valid.
+        let mut bytes = TINY_JPEG[..2].to_vec();
+        bytes.extend_from_slice(&[
+            0xff, 0xe1, 0x00, 0x10, b'E', b'x', b'i', b'f', 0, 0, b'P', b'I', 0, 0x2a, 0, 0, 0, 8,
+        ]);
+        bytes.extend_from_slice(&TINY_JPEG[2..]);
+        fs::write(&path, bytes).unwrap();
+
+        let load_error = Metadata::new_from_path(&path).unwrap_err();
+        assert!(is_critical_exif_error(&load_error));
+
+        let pairs = vec![MediaMetadataPair::WithMetadata(
+            path.clone(),
+            Box::new(base_metadata()),
+            None,
+        )];
+        let summary = write_exif_metadata_batch(&pairs).unwrap();
+
+        assert_eq!(summary.exif_written, 1);
+        assert_eq!(summary.fresh_exif_blocks, 1);
+        assert!(summary.failures.is_empty());
+        assert_eq!(summary.total_processed(), 1);
+        assert_eq!(
+            read_string_tag(&path, &ExifTag::DateTimeOriginal(String::new())).as_deref(),
+            Some("2021:01:01 00:00:00")
+        );
     }
 
     /// A corrupt file with an image extension must survive untouched. The
