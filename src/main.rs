@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Shaun Murphy
 
-use clap::{Parser, ValueEnum, error::ErrorKind};
+use clap::{ArgAction, Parser, ValueEnum, error::ErrorKind};
 use log::{debug, warn};
 use std::path::PathBuf;
 use std::process;
@@ -87,14 +87,14 @@ struct Args {
     )]
     output: PathBuf,
 
-    /// Enable verbose logging
+    /// Increase logging verbosity
     #[clap(
         short,
         long,
-        action,
-        help = "Shortcut for --log-level debug (overrides --log-level)"
+        action = ArgAction::Count,
+        help = "Increase logging: -v info, -vv debug, -vvv trace (overrides --log-level)"
     )]
-    verbose: bool,
+    verbose: u8,
 
     /// Set the logging level
     #[clap(
@@ -299,10 +299,11 @@ fn main() {
 
     // Logging precedence: RUST_LOG (env_logger's own default) wins if set,
     // otherwise --verbose, otherwise --log-level.
-    let log_level = if args.verbose {
-        "debug"
-    } else {
-        args.log_level.as_filter()
+    let log_level = match args.verbose {
+        0 => args.log_level.as_filter(),
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
     };
 
     // Set up logging with filtering for the little_exif crate
@@ -311,14 +312,19 @@ fn main() {
     builder.filter_module("little_exif::metadata", log::LevelFilter::Off);
     let logger = builder.build();
     let max_level = logger.filter();
+    takeout_helper_gphotos::progress::set_enabled(max_level < log::LevelFilter::Debug);
     log::set_boxed_logger(Box::new(ProgressLogger::new(logger)))
         .expect("logging should be initialized only once");
     log::set_max_level(max_level);
 
-    if args.verbose && args.log_level != LogLevel::Warn {
+    if args.verbose > 0
+        && args.log_level != LogLevel::Warn
+        && std::env::var_os("RUST_LOG").is_none()
+    {
         warn!(
-            "--verbose overrides --log-level {}; using debug",
-            args.log_level.as_filter()
+            "--verbose overrides --log-level {}; using {}",
+            args.log_level.as_filter(),
+            log_level
         );
     }
 
@@ -424,9 +430,18 @@ mod tests {
         ])
         .unwrap();
         assert!(parsed.recursive);
-        assert!(parsed.verbose);
+        assert_eq!(parsed.verbose, 1);
         assert_eq!(parsed.temp_dir, Some(PathBuf::from("/scratch")));
         assert_eq!(parsed.max_archive_size.as_deref(), Some("10G"));
+    }
+
+    #[test]
+    fn repeated_verbose_flags_increase_the_level() {
+        let debug = parse(&["takeout-helper-gphotos", "-i", "in", "-o", "out", "-vv"]).unwrap();
+        assert_eq!(debug.verbose, 2);
+
+        let trace = parse(&["takeout-helper-gphotos", "-i", "in", "-o", "out", "-vvv"]).unwrap();
+        assert_eq!(trace.verbose, 3);
     }
 
     #[test]

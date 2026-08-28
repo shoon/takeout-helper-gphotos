@@ -158,7 +158,7 @@ pub fn write_exif_metadata_batch_with_tz(
     let exif_pb = crate::progress::add(ProgressBar::new(media_metadata_pairs.len() as u64));
     exif_pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.green} EXIF {pos}/{len} [{wide_bar:.cyan/blue}] ETA {eta}")?
+            .template("  {spinner:.green} {percent:>3}% EXIF {pos}/{len}")?
             .progress_chars("#>-"),
     );
 

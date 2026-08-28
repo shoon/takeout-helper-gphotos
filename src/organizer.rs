@@ -601,7 +601,7 @@ pub fn organize_media_files_with_options(
     organize_pb.set_style(
         ProgressStyle::default_bar()
             .template(&format!(
-                "  {{spinner:.green}} {} {{pos}}/{{len}} [{{wide_bar:.cyan/blue}}] ETA {{eta}}",
+                "  {{spinner:.green}} {{percent:>3}}% {} {{pos}}/{{len}}",
                 label
             ))?
             .progress_chars("#>-"),

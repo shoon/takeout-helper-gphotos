@@ -98,8 +98,9 @@ failure and remains visible in the CSV report.
 ## Privacy
 
 Sidecars can contain descriptions, timestamps, filenames, GPS coordinates, and
-account-related context. Logs and CSV reports can contain local paths. Redact
-these before sharing diagnostics, and remove retained scratch directories when
-they are no longer needed.
+account-related context. Info and debug logs can contain local paths, media
+filenames, and GPS coordinates used for timezone resolution. Redact these and
+CSV reports before sharing diagnostics, and remove retained scratch directories
+when they are no longer needed.
 
 Report a safety-boundary failure privately through [SECURITY.md](../SECURITY.md).

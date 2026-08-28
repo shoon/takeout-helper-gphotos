@@ -722,7 +722,7 @@ fn find_media_files_counted(
     discovery_pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", ""])
-            .template("  {spinner:.green} Media discovery | {wide_msg}")?,
+            .template("  {spinner:.green} Media found: {pos}")?,
     );
     discovery_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -739,7 +739,7 @@ fn find_media_files_counted(
 
         if is_media_extension(ext) {
             media_files.push(path.to_path_buf());
-            discovery_pb.set_message(format!("Found: {}", name));
+            discovery_pb.inc(1);
         } else if !is_json_name(&name) {
             *skipped += 1;
             debug!("Skipping non-media file: {}", path.display());
@@ -778,7 +778,7 @@ pub fn pair_media_with_metadata(
     let pairing_pb = crate::progress::add(ProgressBar::new(media_files.len() as u64));
     pairing_pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.green} Pair {pos}/{len} [{wide_bar:.cyan/blue}] ETA {eta}")?
+            .template("  {spinner:.green} {percent:>3}% Pair {pos}/{len}")?
             .progress_chars("#>-"),
     );
 
@@ -820,7 +820,7 @@ pub fn pair_media_with_metadata(
         match paired {
             Some(pair) => pairs.push(pair),
             None => {
-                info!("No metadata file found for: {}", media_file.display());
+                debug!("No metadata file found for: {}", media_file.display());
                 stats.files_without_metadata += 1;
                 pairs.push(MediaMetadataPair::WithoutMetadata(media_file.clone()));
             }

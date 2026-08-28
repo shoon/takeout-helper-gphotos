@@ -9,20 +9,38 @@
 //! direct status messages suspend this renderer while they are written, then
 //! redraw the active bars at the terminal's current width.
 
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget};
 use log::{Log, Metadata, Record};
-use std::sync::OnceLock;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 static PROGRESS: OnceLock<MultiProgress> = OnceLock::new();
+static RENDER_PROGRESS: AtomicBool = AtomicBool::new(true);
 
 /// The process-wide progress renderer.
 pub fn multi_progress() -> &'static MultiProgress {
     PROGRESS.get_or_init(MultiProgress::new)
 }
 
+/// Enable or disable animated terminal rows.
+///
+/// Debug and trace logging already produce continuous per-file activity, so
+/// hiding animation at those levels avoids redrawing progress around every log
+/// record.
+pub fn set_enabled(enabled: bool) {
+    RENDER_PROGRESS.store(enabled, Ordering::Relaxed);
+}
+
 /// Register a bar with the process-wide renderer.
 pub fn add(bar: ProgressBar) -> ProgressBar {
-    multi_progress().add(bar)
+    if RENDER_PROGRESS.load(Ordering::Relaxed) {
+        multi_progress().add(bar)
+    } else {
+        bar.set_draw_target(ProgressDrawTarget::hidden());
+        bar
+    }
 }
 
 /// Print a status line without corrupting active progress bars.
