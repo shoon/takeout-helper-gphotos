@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.heic binary
+*.jpg binary
+*.png binary
+
+# Preserve generated/upstream license material byte-for-byte.
+THIRD_PARTY_NOTICES.txt -whitespace
+vendor/little_exif/README.md -whitespace

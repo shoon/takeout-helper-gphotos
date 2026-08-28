@@ -1,0 +1,13 @@
+Takeout Helper for Google Photos
+Copyright 2026 Shaun Murphy
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This distribution incorporates third-party open-source software. See
+THIRD_PARTY_NOTICES.txt for dependency names and license texts. The locally
+patched little_exif source retains its original copyright and license notices
+under vendor/little_exif.
+
+Google Photos, Google Takeout, and Google are trademarks of Google LLC. This
+product is an independent work and is not affiliated with, authorized,
+sponsored, approved, or endorsed by Google LLC. See TRADEMARKS.md.

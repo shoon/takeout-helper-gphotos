@@ -1,0 +1,46 @@
+[package]
+name = "little_exif"
+version = "0.6.23+security.1"
+authors = ["Tobias Prisching"]
+edition = "2021"
+rust-version = "1.88"
+description = "Pure-Rust EXIF reader and writer (locally patched dependency)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/TechnikTobi/little_exif"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "little_exif"
+path = "src/lib.rs"
+
+[dependencies]
+brotli = "8.0.4"
+crc = "3.4.0"
+log = "0.4.34"
+miniz_oxide = "0.9.1"
+pastey = "0.2.3"
+quick-xml = "0.42.0"
+
+[lints.clippy]
+collapsible_else_if = "allow"
+doc_lazy_continuation = "allow"
+empty_line_after_doc_comments = "allow"
+from_over_into = "allow"
+identity_op = "allow"
+io_other_error = "allow"
+manual_checked_ops = "allow"
+manual_is_multiple_of = "allow"
+match_same_arms = "allow"
+modulo_one = "allow"
+needless_late_init = "allow"
+needless_range_loop = "allow"
+new_without_default = "allow"
+question_mark = "allow"
+same_item_push = "allow"
+todo = "warn"
+unreachable = "warn"
+unnecessary_cast = "allow"
+unused_io_amount = "allow"
+unwrap_used = "warn"
+upper_case_acronyms = "allow"

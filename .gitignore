@@ -1,0 +1,9 @@
+/target/
+/dist/
+/testdata/
+/test_metadata/
+/test_output/
+/organized_test/
+
+.DS_Store
+Thumbs.db

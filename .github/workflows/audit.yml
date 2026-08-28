@@ -1,0 +1,111 @@
+name: Dependency audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - about.toml
+      - about-third-party.hbs
+      - THIRD_PARTY_NOTICES.txt
+      - vendor/little_exif/**
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - about.toml
+      - about-third-party.hbs
+      - THIRD_PARTY_NOTICES.txt
+      - vendor/little_exif/**
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: "23 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rustsec:
+    name: RustSec advisory database
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
+
+      - name: Audit locked dependencies
+        run: cargo audit
+
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --version 0.9.2 --locked --features cli
+
+      - name: Regenerate license report
+        run: >-
+          cargo about generate about-third-party.hbs --locked --fail
+          --output-file THIRD_PARTY_NOTICES.generated.txt
+
+      - name: Verify committed report
+        run: diff -u THIRD_PARTY_NOTICES.txt THIRD_PARTY_NOTICES.generated.txt
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          license-check: true
+          allow-licenses: >-
+            Apache-2.0,
+            BSD-3-Clause,
+            CC0-1.0,
+            MIT,
+            MIT-0,
+            ODbL-1.0,
+            Unicode-3.0,
+            Zlib,
+            bzip2-1.0.6

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/shoon/takeout-helper-gphotos/security/advisories/new
+    about: Report path traversal, overwrite, deletion, corruption, or resource-exhaustion issues privately.

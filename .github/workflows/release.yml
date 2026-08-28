@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release inputs
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "takeout-helper-gphotos") | .version')"
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Check format, tests, and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Install release audit tools
+        run: |
+          cargo install cargo-audit --version 0.22.1 --locked
+          cargo install cargo-about --version 0.9.2 --locked --features cli
+
+      - name: Audit dependencies and licenses
+        run: |
+          cargo audit
+          cargo about generate about-third-party.hbs --locked --fail --output-file THIRD_PARTY_NOTICES.generated.txt
+          diff -u THIRD_PARTY_NOTICES.txt THIRD_PARTY_NOTICES.generated.txt
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+            archive: tar
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            archive: tar
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+            archive: zip
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            platform: windows-arm64
+            archive: zip
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            platform: macos-x64
+            archive: tar
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          rustup default stable
+
+      - name: Test native target
+        run: cargo test --locked --all-targets --target ${{ matrix.target }}
+
+      - name: Build native release
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package Unix release
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="takeout-helper-gphotos-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          package="dist/$base"
+          mkdir -p "$package/docs" "$package/third-party/little_exif"
+          cp "target/${{ matrix.target }}/release/takeout-helper-gphotos" "$package/"
+          cp LICENSE NOTICE README.md SECURITY.md TRADEMARKS.md CHANGELOG.md THIRD_PARTY_NOTICES.txt "$package/"
+          cp docs/*.md "$package/docs/"
+          cp vendor/little_exif/LICENSE-APACHE vendor/little_exif/LICENSE-MIT vendor/little_exif/README.md "$package/third-party/little_exif/"
+          tar -C dist -czf "dist/$base.tar.gz" "$base"
+
+      - name: Package Windows release
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "takeout-helper-gphotos-$env:GITHUB_REF_NAME-${{ matrix.platform }}"
+          $package = Join-Path "dist" $base
+          $docs = Join-Path $package "docs"
+          $thirdParty = Join-Path $package "third-party\little_exif"
+          New-Item -ItemType Directory -Force -Path $docs, $thirdParty | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\takeout-helper-gphotos.exe" $package
+          Copy-Item "LICENSE", "NOTICE", "README.md", "SECURITY.md", "TRADEMARKS.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.txt" $package
+          Copy-Item "docs\*.md" $docs
+          Copy-Item "vendor\little_exif\LICENSE-APACHE", "vendor\little_exif\LICENSE-MIT", "vendor\little_exif\README.md" $thirdParty
+          Compress-Archive -Path "$package\*" -DestinationPath "dist\$base.zip" -CompressionLevel Optimal
+
+      - name: Upload packaged release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: takeout-helper-gphotos-${{ github.ref_name }}-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: takeout-helper-gphotos-${{ github.ref_name }}-*
+          merge-multiple: true
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Takeout Helper for Google Photos $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

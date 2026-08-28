@@ -1,0 +1,22 @@
+THIRD-PARTY SOFTWARE NOTICES AND LICENSES
+=========================================
+
+Takeout Helper for Google Photos incorporates the open-source Rust crates
+listed below. Each component is provided under its own license. This report is
+generated from Cargo.lock with cargo-about; do not edit it by hand.
+
+{{#each licenses}}
+================================================================================
+{{{name}}}
+================================================================================
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+License text:
+
+{{{text}}}
+
+{{/each}}
