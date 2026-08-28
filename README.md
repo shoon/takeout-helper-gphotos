@@ -12,7 +12,7 @@
   <a href="https://github.com/shoon/takeout-helper-gphotos/actions/workflows/ci.yml"><img src="https://github.com/shoon/takeout-helper-gphotos/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/shoon/takeout-helper-gphotos/actions/workflows/audit.yml"><img src="https://github.com/shoon/takeout-helper-gphotos/actions/workflows/audit.yml/badge.svg" alt="Dependency audit status"></a>
   <a href="https://github.com/shoon/takeout-helper-gphotos/releases/latest"><img src="https://img.shields.io/github/v/release/shoon/takeout-helper-gphotos?display_name=tag&amp;sort=semver" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/shoon/takeout-helper-gphotos" alt="Apache 2.0 license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-67ac09" alt="Apache 2.0 license"></a>
   <a href="https://github.com/sponsors/shoon"><img src="https://img.shields.io/badge/Sponsor-shoon-EA4AAA?logo=githubsponsors&amp;logoColor=white" alt="Sponsor shoon on GitHub"></a>
 </p>
 
