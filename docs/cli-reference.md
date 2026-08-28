@@ -59,11 +59,20 @@ silently falling back.
 | Option | Meaning |
 | --- | --- |
 | `--log-level <LEVEL>` | `error`, `warn`, `info`, `debug`, or `trace`; default `warn` |
-| `-v`, `--verbose` | Shortcut for debug logging |
+| `-v`, `--verbose` | Phase and archive information (`info`) |
+| `-vv` | Per-file diagnostics (`debug`) |
+| `-vvv` | Maximum diagnostic detail (`trace`) |
 | `-h`, `--help` | Print help |
 | `-V`, `--version` | Print version |
 
 Precedence is `RUST_LOG`, then `--verbose`, then `--log-level`.
+Animated progress remains visible with `-v`. It is hidden at debug and trace
+levels because continuous per-file log records already show activity and would
+otherwise cause constant redraws.
+
+Info and debug output can include archive paths, media filenames, temporary
+paths, and GPS coordinates used for offline timezone resolution. Redact logs
+before sharing them.
 
 ## Reports
 

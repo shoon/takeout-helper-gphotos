@@ -7,7 +7,7 @@
 //! thin shim that parses CLI arguments, sets up logging and calls [`run`].
 
 use chrono::{DateTime, Utc};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::fs;
@@ -26,9 +26,9 @@ use crate::{archive, exif, manifest, metadata, organizer, stats, verify};
 /// Name of the machine-readable per-file report written into the output dir.
 pub const REPORT_FILE_NAME: &str = "takeout-helper-report.csv";
 
-const OVERALL_PROGRESS_TEMPLATE: &str =
-    "{spinner:.green} [{bar:18.cyan/blue}] {pos}/{len} stages complete | {msg}";
-const VERIFY_PROGRESS_TEMPLATE: &str = "  {spinner:.green} Verify [{bar:20.cyan/blue}] files {pos}/{len} | {elapsed_precise} | ETA {eta}";
+const OVERALL_PROGRESS_TEMPLATE: &str = "{spinner:.green} {msg}";
+const VERIFY_PROGRESS_TEMPLATE: &str = "  {spinner:.green} {percent:>3}% Verify {pos}/{len}";
+const SETUP_STAGE_COUNT: usize = 2;
 
 /// Configuration for a single run of the pipeline.
 ///
@@ -137,6 +137,14 @@ fn pipeline_stages(verify: bool) -> Vec<&'static str> {
     }
     stages.push("Finalizing output");
     stages
+}
+
+/// Name the current processing step without pretending that equally sized
+/// steps represent equal amounts of time or work.
+fn set_processing_stage(progress: &ProgressBar, name: &str) {
+    let total = progress.length().unwrap_or(0);
+    let step = progress.position().saturating_add(1).min(total);
+    progress.set_message(format!("Step {step} of {total}: {name}"));
 }
 
 /// The sidecar capture date of a pair, if it has one.
@@ -331,10 +339,12 @@ fn no_archives_message(input: &Path, recursive: bool) -> String {
 /// Run the full Google Photos takeout processing pipeline.
 pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> {
     // Initialize overall progress tracking
-    let multi_progress = MultiProgress::new();
     let verify_stage = config.verify && !config.dry_run;
     let stages = pipeline_stages(verify_stage);
-    let overall_pb = multi_progress.add(ProgressBar::new(stages.len() as u64));
+    // Preparation and archive discovery establish what work exists but are not
+    // numbered processing steps. Extraction starts at step 1.
+    let processing_stage_count = stages.len().saturating_sub(SETUP_STAGE_COUNT);
+    let overall_pb = crate::progress::add(ProgressBar::new(processing_stage_count as u64));
     overall_pb.set_style(
         ProgressStyle::default_bar()
             .template(OVERALL_PROGRESS_TEMPLATE)?
@@ -387,11 +397,11 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     info!("Output directory validated: {}", config.output.display());
 
     if config.dry_run {
-        println!(
+        crate::progress::println(format!(
             "DRY RUN: archives will be extracted to scratch space so the run can be planned, \
              but nothing will be written into {}.",
             config.output.display()
-        );
+        ));
         if config.verify {
             warn!("--verify does nothing during a --dry-run: there is no manifest to verify");
         }
@@ -417,8 +427,6 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     let max_file_size = parse_optional_size("--max-file-size", config.max_file_size.as_ref())?;
     let max_archive_size =
         parse_optional_size("--max-archive-size", config.max_archive_size.as_ref())?;
-    overall_pb.inc(1);
-
     // Archive processing phase
     info!("Starting archive processing phase");
     overall_pb.set_message("Discovering archives");
@@ -431,14 +439,13 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
         }
     };
     stats.archives_found = archive_files.len();
-    overall_pb.inc(1);
 
     // Finding nothing at all is a *failure*, not a silent success.
     if archive_files.is_empty() {
         overall_pb.finish_and_clear();
         let message = no_archives_message(&config.input, config.recursive);
         error!("{}", message);
-        eprintln!("\n{}\n", message);
+        crate::progress::eprintln(format!("\n{}\n", message));
         stats.total_processing_time = start_time.elapsed();
         stats::generate_summary(&stats);
         return Ok(RunOutcome::CompletedWithErrors(stats));
@@ -489,7 +496,14 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     // Log the temp directory path on application startup
     info!("Using temporary directory: {}", temp_dir.path().display());
 
-    overall_pb.set_message("Extracting archives");
+    set_processing_stage(
+        &overall_pb,
+        &format!(
+            "Extracting {} archive{}",
+            archive_files.len(),
+            if archive_files.len() == 1 { "" } else { "s" }
+        ),
+    );
     let extraction_results = archive::extract_archives(
         archive_files,
         temp_dir.path(),
@@ -562,7 +576,7 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
 
     // Metadata processing phase
     info!("Starting metadata processing phase");
-    overall_pb.set_message("Discovering media files");
+    set_processing_stage(&overall_pb, "Discovering media files");
 
     // Find all media files in the extracted content
     let media_files = match metadata::find_media_files_with_stats(temp_dir.path(), &mut stats) {
@@ -578,7 +592,7 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     overall_pb.inc(1);
 
     // Pair media files with their JSON metadata
-    overall_pb.set_message("Pairing media with sidecars");
+    set_processing_stage(&overall_pb, "Pairing media with sidecars");
     let media_metadata_pairs = match metadata::pair_media_with_metadata(media_files, &mut stats) {
         Ok(pairs) => pairs,
         Err(e) => {
@@ -602,7 +616,7 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     info!("Metadata processing phase completed");
 
     // Live Photo pre-processing phase
-    overall_pb.set_message("Indexing Live Photos");
+    set_processing_stage(&overall_pb, "Indexing Live Photos");
     info!("Starting Live Photo pre-processing phase");
     let live_photo_dates = build_live_photo_dates_map(&media_metadata_pairs);
     info!(
@@ -613,7 +627,7 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
 
     // EXIF processing phase
     info!("Starting EXIF processing phase");
-    overall_pb.set_message("Writing EXIF metadata");
+    set_processing_stage(&overall_pb, "Writing EXIF metadata");
 
     // Write EXIF metadata to media files. The batch borrows the pairs, so no
     // clone is needed here.
@@ -626,10 +640,10 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
         // rewrites them in place, and `--keep-temp` would then hand the user a
         // scratch directory that had been quietly altered.
         info!("Skipping the EXIF phase: --dry-run");
-        println!(
+        crate::progress::println(format!(
             "DRY RUN: metadata writes skipped ({} files paired)",
             media_metadata_pairs.len()
-        );
+        ));
     } else {
         match exif::write_exif_metadata_batch_with_tz(&media_metadata_pairs, config.timezone) {
             Ok(mut exif_summary) => {
@@ -691,7 +705,7 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
 
     // Chronological organization phase
     info!("Starting chronological organization phase");
-    overall_pb.set_message("Organizing files");
+    set_processing_stage(&overall_pb, "Organizing files");
 
     // source -> final output path, used to translate temp paths in the report.
     let mut destinations: HashMap<PathBuf, PathBuf> = HashMap::new();
@@ -850,8 +864,8 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     // Runs last and never during a dry run because there is nothing on disk to
     // check.
     if config.verify && !config.dry_run && !interrupted {
-        overall_pb.set_message("Verifying organized files");
-        let verify_pb = multi_progress.add(ProgressBar::new(manifest.len() as u64));
+        set_processing_stage(&overall_pb, "Verifying organized files");
+        let verify_pb = crate::progress::add(ProgressBar::new(manifest.len() as u64));
         verify_pb.set_style(
             ProgressStyle::default_bar()
                 .template(VERIFY_PROGRESS_TEMPLATE)?
@@ -956,7 +970,7 @@ fn finalize(
         interrupted,
         overall_progress: overall_pb,
     } = status;
-    overall_pb.set_message("Finalizing output");
+    set_processing_stage(overall_pb, "Finalizing output");
     stats.interrupted = interrupted;
     stats.total_processing_time = start_time.elapsed();
 
@@ -987,28 +1001,24 @@ fn finalize(
 
     if config.keep_temp {
         let kept = temp_dir.keep();
-        println!(
+        crate::progress::println(format!(
             "--keep-temp: extracted files left in {} (delete it yourself when done)",
             kept.display()
-        );
+        ));
     } else {
         drop(temp_dir);
     }
 
     overall_pb.inc(1);
-    if interrupted {
-        overall_pb.abandon_with_message("Run interrupted");
-    } else {
-        overall_pb.finish_with_message("Processing completed");
-    }
+    overall_pb.finish_and_clear();
 
     stats::generate_summary(stats);
 
     if interrupted {
-        println!(
+        crate::progress::println(format!(
             "Interrupted before completion. Media extensions searched: {}",
             MEDIA_EXTENSIONS.join(", ")
-        );
+        ));
     }
 }
 
@@ -1164,10 +1174,30 @@ mod tests {
     #[test]
     fn overall_progress_names_every_pipeline_stage() {
         assert!(OVERALL_PROGRESS_TEMPLATE.contains("{msg}"));
-        assert!(OVERALL_PROGRESS_TEMPLATE.contains("stages complete"));
+        assert!(!OVERALL_PROGRESS_TEMPLATE.contains("{bar"));
+        assert!(!OVERALL_PROGRESS_TEMPLATE.contains("{wide_bar"));
         assert!(!OVERALL_PROGRESS_TEMPLATE.contains("{eta}"));
-        assert!(VERIFY_PROGRESS_TEMPLATE.contains("files {pos}/{len}"));
-        assert!(VERIFY_PROGRESS_TEMPLATE.contains("ETA {eta}"));
+        assert!(!OVERALL_PROGRESS_TEMPLATE.contains("{percent"));
+        assert!(VERIFY_PROGRESS_TEMPLATE.contains("Verify {pos}/{len}"));
+        assert!(VERIFY_PROGRESS_TEMPLATE.contains("{percent"));
+        assert!(!VERIFY_PROGRESS_TEMPLATE.contains("{bar"));
+        assert!(!VERIFY_PROGRESS_TEMPLATE.contains("{wide_bar"));
+        assert_eq!(pipeline_stages(true).len() - SETUP_STAGE_COUNT, 8);
+        assert_eq!(pipeline_stages(false).len() - SETUP_STAGE_COUNT, 7);
+
+        let progress = ProgressBar::hidden();
+        progress.set_length(8);
+        set_processing_stage(&progress, "Extracting archives");
+        assert_eq!(
+            progress.message(),
+            "Step 1 of 8: Extracting archives".to_string()
+        );
+        progress.inc(1);
+        set_processing_stage(&progress, "Discovering media files");
+        assert_eq!(
+            progress.message(),
+            "Step 2 of 8: Discovering media files".to_string()
+        );
         assert_eq!(
             pipeline_stages(true),
             vec![

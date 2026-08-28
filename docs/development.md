@@ -19,6 +19,7 @@ runtime.
 | --- | --- |
 | `main.rs` | CLI parsing, logging, process exit codes |
 | `app.rs` | End-to-end phase orchestration and reports |
+| `progress.rs` | Shared terminal rendering and progress-aware logging |
 | `archive.rs` | Discovery, split-set warnings, confined extraction, scratch ownership |
 | `metadata.rs` | Media discovery, sidecar indexing, parsing, validation |
 | `exif.rs` | Image EXIF, timezone resolution, QuickTime timestamps, atomic replacement |

@@ -10,7 +10,7 @@
 
 use filetime::FileTime;
 use flate2::read::GzDecoder;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rand::{RngExt, distr::Alphanumeric};
 use rayon::prelude::*;
@@ -444,11 +444,11 @@ impl Drop for TempDir {
             // Defense in depth: never `remove_dir_all` a directory the user
             // handed us, even when its name resembles one of our scratch dirs.
             // Better to leak a scratch dir than to delete data.
-            eprintln!(
+            crate::progress::eprintln(format!(
                 "Warning: refusing to delete temporary directory {} (name does not start with '{}')",
                 self.path.display(),
                 TEMP_DIR_PREFIX
-            );
+            ));
             return;
         }
 
@@ -458,11 +458,11 @@ impl Drop for TempDir {
 
         if let Err(e) = fs::remove_dir_all(&self.path) {
             // We use eprintln here because we can't use the log crate during drop
-            eprintln!(
+            crate::progress::eprintln(format!(
                 "Warning: Failed to remove temporary directory {}: {}",
                 self.path.display(),
                 e
-            );
+            ));
         }
     }
 }
@@ -485,11 +485,11 @@ pub fn find_archive_files(
     let mut archive_files = Vec::new();
 
     // Create a progress bar for file discovery
-    let discovery_pb = ProgressBar::new_spinner();
+    let discovery_pb = crate::progress::add(ProgressBar::new_spinner());
     discovery_pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", ""])
-            .template("  {spinner:.green} Archive discovery | {msg}")?,
+            .template("  {spinner:.green} Archives found: {pos}")?,
     );
     discovery_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -505,15 +505,12 @@ pub fn find_archive_files(
         let path = entry.path();
 
         if path.is_file() && classify_archive(path).is_some() {
-            discovery_pb.set_message(format!(
-                "Found: {}",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ));
             archive_files.push(path.to_path_buf());
+            discovery_pb.inc(1);
         }
     }
 
-    discovery_pb.finish_with_message(format!("Found {} archive files", archive_files.len()));
+    discovery_pb.finish_and_clear();
 
     if archive_files.is_empty() {
         warn!(
@@ -525,24 +522,23 @@ pub fn find_archive_files(
                 " (non-recursive - try --recursive)"
             }
         );
-        eprintln!(
+        crate::progress::eprintln(format!(
             "Warning: no archives found in {} - nothing to do.",
             input_path.display()
-        );
+        ));
     }
 
     Ok(archive_files)
 }
 
 /// Build a progress bar used for a standalone (non-batched) extraction.
-fn standalone_progress_bar(label: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    if let Ok(style) = ProgressStyle::default_spinner()
-        .template("  {spinner:.green} Extracting {msg} | {pos} entries | {elapsed_precise} elapsed")
+fn standalone_progress_bar(_label: &str) -> ProgressBar {
+    let pb = crate::progress::add(ProgressBar::new_spinner());
+    if let Ok(style) =
+        ProgressStyle::default_spinner().template("  {spinner:.green} {pos} entries processed")
     {
         pb.set_style(style);
     }
-    pb.set_message(label.to_string());
     pb
 }
 
@@ -625,8 +621,6 @@ fn extract_zip_inner(
     check_disk_space(extract_dir, declared_total)?;
 
     let base = canonical_base(extract_dir)?;
-
-    pb.set_length(archive.len() as u64);
 
     let max_file_size = limits.file_size();
     let mut summary = ExtractionSummary::default();
@@ -867,13 +861,6 @@ fn extract_tgz_inner(
             )));
         }
 
-        pb.set_message(format!(
-            "{} ({} files, {} MiB)",
-            tgz_path.file_name().unwrap_or_default().to_string_lossy(),
-            summary.files_extracted,
-            summary.bytes_written / (1024 * 1024)
-        ));
-
         apply_mtime(&outpath, mtime);
     }
 
@@ -934,34 +921,27 @@ pub fn extract_archives(
 
     let limits = Limits::new(max_file_size, max_archive_size, max_files);
 
-    let multi = MultiProgress::new();
-    let overall = multi.add(ProgressBar::new(archive_files.len() as u64));
-    if let Ok(style) = ProgressStyle::default_bar().template(
-        "  {spinner:.green} Archives [{bar:20.cyan/blue}] {pos}/{len} | {elapsed_precise} | ETA {eta}",
-    ) {
-        overall.set_style(style.progress_chars("#>-"));
+    // A TGZ stream does not expose its final entry count up front. One shared
+    // spinner therefore reports aggregate activity across every parallel
+    // archive without creating a resize-sensitive row for each shard.
+    let extraction_pb = crate::progress::add(ProgressBar::new_spinner());
+    if let Ok(style) =
+        ProgressStyle::default_spinner().template("  {spinner:.green} {pos} entries processed")
+    {
+        extraction_pb.set_style(style);
     }
+    extraction_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let results: Vec<(PathBuf, Result<ExtractionSummary, ArchiveError>)> = archive_files
         .into_par_iter()
         .map(|archive_file| {
-            let pb = multi.add(ProgressBar::new_spinner());
-            if let Ok(style) = ProgressStyle::default_spinner().template(
-                "  {spinner:.green} Extracting {msg} | {pos} entries | {elapsed_precise} elapsed",
-            ) {
-                pb.set_style(style);
-            }
-            pb.set_message(
-                archive_file
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
-            );
-
             let result = match classify_archive(&archive_file) {
-                Some(ArchiveKind::Zip) => extract_zip_inner(&archive_file, temp_dir, limits, &pb),
-                Some(ArchiveKind::Tgz) => extract_tgz_inner(&archive_file, temp_dir, limits, &pb),
+                Some(ArchiveKind::Zip) => {
+                    extract_zip_inner(&archive_file, temp_dir, limits, &extraction_pb)
+                }
+                Some(ArchiveKind::Tgz) => {
+                    extract_tgz_inner(&archive_file, temp_dir, limits, &extraction_pb)
+                }
                 None => Err(ArchiveError::Other(format!(
                     "Unsupported archive format: {}",
                     archive_file.display()
@@ -980,18 +960,11 @@ pub fn extract_archives(
                 Err(e) => log::error!("Failed to extract {}: {}", archive_file.display(), e),
             }
 
-            pb.finish_and_clear();
-            overall.inc(1);
             (archive_file, result)
         })
         .collect();
 
-    let failures = results.iter().filter(|(_, r)| r.is_err()).count();
-    overall.finish_with_message(format!(
-        "{} archives extracted, {} failed",
-        results.len() - failures,
-        failures
-    ));
+    extraction_pb.finish_and_clear();
 
     results
 }
@@ -1137,7 +1110,7 @@ pub fn report_split_archives(groups: &[ArchiveGroup]) {
                 group.part_numbers.len() + group.missing.len()
             );
             warn!("{}", message);
-            eprintln!("\nWARNING: {}\n", message);
+            crate::progress::eprintln(format!("\nWARNING: {}\n", message));
         }
     }
 }

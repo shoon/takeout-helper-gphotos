@@ -5,6 +5,16 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+- Coordinate progress bars, status messages, and logs through one terminal
+  renderer so Windows window resizing and warnings do not overwrite live rows.
+- Replace graphical bars with compact animated spinners, numbered processing
+  steps, task percentages when a total is known, and item counts that remain
+  short when a terminal window is resized.
+- Use one aggregate extraction row instead of one live row per archive, and
+  clear completed detail rows instead of leaving stale cursor positions behind.
+- Make `-v` show useful phase-level information, reserve per-file diagnostics
+  for `-vv`, and hide animated progress when debug or trace logs are active.
+
 - Show preparation, archive discovery, extraction, media discovery, sidecar
   pairing, Live Photo indexing, metadata writing, organization, verification,
   and finalization in the progress display.

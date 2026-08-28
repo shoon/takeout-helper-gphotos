@@ -4,6 +4,27 @@ Start with the process exit code, the final summary, and
 `takeout-helper-report.csv` when present. Add `--log-level info` or `--verbose`
 for more detail; `RUST_LOG` takes precedence when it is set.
 
+## Progress rows overlap or redraw incorrectly
+
+Current builds coordinate every progress row and log line through one terminal
+renderer. Progress uses short animated spinners, percentages, and item counts
+instead of width-filling bars. Archive extraction uses one aggregate detail row
+rather than one row per archive. Resizing Windows Terminal or PowerShell should
+therefore redraw the small set of active rows without leaving old text behind.
+Completed detail rows are cleared, and their results remain available in the
+final summary.
+
+The overall row uses `Step N of N` after setup and archive discovery. Detail
+rows show percentages when the task has a known total. Streaming `.tgz`
+extraction cannot know its final entry count in advance, so that row reports the
+number of input archives and entries processed while its spinner shows that
+work is continuing.
+
+If a terminal still renders incorrectly, capture the terminal application and
+version, shell, initial and resized window widths, and whether a warning was
+printed at the same time. The final summary is plain text and remains the
+authoritative result.
+
 ## No archives were found
 
 Confirm that `--input` names a directory, not an individual archive. By default,

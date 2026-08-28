@@ -596,12 +596,15 @@ pub fn organize_media_files_with_options(
     );
 
     // Create a progress bar for file organization
-    let organize_pb = ProgressBar::new(media_metadata_pairs.len() as u64);
+    let organize_pb = crate::progress::add(ProgressBar::new(media_metadata_pairs.len() as u64));
     let label = if options.dry_run { "Plan" } else { "Organize" };
     organize_pb.set_style(
         ProgressStyle::default_bar()
-            .template(&format!("  {{spinner:.green}} {} [{{bar:20.cyan/blue}}] files {{pos}}/{{len}} | {{elapsed_precise}} | ETA {{eta}}", label))?
-            .progress_chars("#>-")
+            .template(&format!(
+                "  {{spinner:.green}} {{percent:>3}}% {} {{pos}}/{{len}}",
+                label
+            ))?
+            .progress_chars("#>-"),
     );
 
     let context = OrganizeContext::new();
@@ -643,20 +646,7 @@ pub fn organize_media_files_with_options(
         );
     }
 
-    organize_pb.finish_with_message(if options.dry_run {
-        format!(
-            "Dry run completed: {} files would be organized, {} would be skipped as duplicates, {} undated, {} errors",
-            summary.planned, summary.planned_duplicates, summary.unknown_date, summary.failures.len()
-        )
-    } else {
-        format!(
-            "Organization completed: {} organized, {} duplicates skipped, {} undated, {} errors",
-            summary.organized,
-            summary.duplicates_skipped,
-            summary.unknown_date,
-            summary.failures.len()
-        )
-    });
+    organize_pb.finish_and_clear();
 
     Ok(summary)
 }

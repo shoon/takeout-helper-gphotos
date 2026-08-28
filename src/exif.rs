@@ -155,11 +155,11 @@ pub fn write_exif_metadata_batch_with_tz(
     );
 
     // Create a progress bar for EXIF writing
-    let exif_pb = ProgressBar::new(media_metadata_pairs.len() as u64);
+    let exif_pb = crate::progress::add(ProgressBar::new(media_metadata_pairs.len() as u64));
     exif_pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.green} EXIF [{bar:20.cyan/blue}] files {pos}/{len} | {elapsed_precise} | ETA {eta}")?
-            .progress_chars("#>-")
+            .template("  {spinner:.green} {percent:>3}% EXIF {pos}/{len}")?
+            .progress_chars("#>-"),
     );
 
     // Process each media file in parallel, borrowing the slice.
@@ -223,11 +223,11 @@ pub fn write_exif_metadata_batch_with_tz(
             "Shutdown requested: {} files were not processed in the EXIF phase",
             summary.not_processed
         );
-        exif_pb.finish_with_message("EXIF metadata writing interrupted");
+        exif_pb.finish_and_clear();
         return Ok(summary);
     }
 
-    exif_pb.finish_with_message("EXIF metadata writing completed");
+    exif_pb.finish_and_clear();
 
     info!(
         "EXIF phase: {} written ({} fresh blocks after unreadable existing EXIF), {} video dates written, {} mtime-only, {} without metadata, {} failed",
