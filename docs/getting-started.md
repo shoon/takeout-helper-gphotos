@@ -134,6 +134,11 @@ takeout-helper-gphotos --verify \
   --input ./takeout --output ./photos
 ```
 
+The progress display names each stage, including verification. Verification
+reads and hashes every media path recorded in the manifest, so it can take
+several minutes for a large library even when all earlier work succeeded. Its
+per-file counter and estimated time continue updating while that scan runs.
+
 Exit code `0` means the run completed without recorded failures. Exit code `1`
 means output may still have been produced, but the summary and
 `takeout-helper-report.csv` need review. Exit code `130` means Ctrl+C interrupted

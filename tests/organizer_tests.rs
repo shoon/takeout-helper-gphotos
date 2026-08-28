@@ -2,6 +2,7 @@
 // Copyright 2026 Shaun Murphy
 
 use std::collections::HashMap;
+use std::path::Path;
 use takeout_helper_gphotos::manifest::Manifest;
 use takeout_helper_gphotos::metadata::MediaMetadataPair;
 use takeout_helper_gphotos::organizer::*;
@@ -1000,10 +1001,12 @@ fn test_sidecar_copy_failure_is_a_warning() {
 }
 
 /// Turn the records a run produced into a manifest, the way `app::run` does.
-fn manifest_from(summary: &OrganizeSummary) -> Manifest {
+fn manifest_from(summary: &OrganizeSummary, output_dir: &Path) -> Manifest {
     let mut manifest = Manifest::default();
     for (hash, destination) in &summary.records {
-        manifest.record(hash.clone(), destination.clone());
+        manifest
+            .record(output_dir, hash.clone(), destination)
+            .unwrap();
     }
     manifest
 }
@@ -1029,7 +1032,7 @@ fn test_manifest_resume_skips_already_organized_content() {
     assert_eq!(first.organized, 1);
     assert_eq!(first.records.len(), 1);
 
-    let manifest = manifest_from(&first);
+    let manifest = manifest_from(&first, out.path());
 
     // Second pass with the manifest: skipped without resolving the date at all.
     let resume = OrganizeOptions {
@@ -1066,11 +1069,10 @@ fn test_manifest_resume_reprocesses_a_deleted_output() {
         record_manifest: true,
         ..Default::default()
     };
-    let manifest = manifest_from(&organize(
-        vec![dated_pair(&media, "1609459200")],
+    let manifest = manifest_from(
+        &organize(vec![dated_pair(&media, "1609459200")], out.path(), &options),
         out.path(),
-        &options,
-    ));
+    );
 
     let destination = out.path().join("2021").join("01").join("IMG_0001.jpg");
     std::fs::remove_file(&destination).unwrap();

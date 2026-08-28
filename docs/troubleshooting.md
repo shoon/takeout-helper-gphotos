@@ -51,6 +51,27 @@ affected file with a current release.
 `--copy-sidecars` can retain the source JSON next to organized media for tools
 that understand Google's sidecar format.
 
+## A fresh EXIF block warning appeared
+
+The image contained an EXIF block that could not be parsed, but the tool was
+able to write and validate a fresh block containing the usable Google sidecar
+metadata. The organized file is usable and counts as an EXIF success. Existing
+tags from the unreadable block may not have been preserved, so keep the Takeout
+archive and inspect an affected output sample.
+
+## The process appears to pause after metadata writing
+
+With `--verify`, the program must read and hash every primary media output after
+organization. On a large library or a slower disk, verification can take
+several minutes. Current builds show verification as a named stage with a
+per-file counter and estimated time. Wait for the final summary unless the
+counter has stopped changing and the disk is no longer active.
+
+An orphan-sidecar warning means a Google JSON companion file had no matching
+recognized media file in the downloaded export. The warning lists the path so
+you can determine whether an archive part is missing or the media filename uses
+an unfamiliar Takeout naming pattern.
+
 ## Video date was not embedded
 
 Only MP4, MOV, and M4V are candidates for QuickTime `mvhd` patching. Some files
@@ -66,6 +87,10 @@ placement was recorded.
 
 Different bytes with the same filename are intentionally not treated as the
 same file.
+
+Version 0.1.0 manifests could record only one path for a given content hash.
+After upgrading, run once with `--force --verify` to rebuild complete path-based
+verification records. Existing byte-identical output files are reused.
 
 ## Permission denied
 

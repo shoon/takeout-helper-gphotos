@@ -52,6 +52,12 @@ The write occurs in a sibling temporary copy. The copy is parsed and checked
 before it replaces the extracted working file, and the desired filesystem
 modification time is applied after the EXIF rewrite.
 
+Some older or malformed files contain an EXIF block that the writer cannot
+parse. If a fresh block can be written safely, the tool still embeds the
+sidecar-derived date, location, and description, then reports that choice in a
+warning and the run summary. Unreadable tags from the old block may not be
+preserved. The original Takeout archive remains unchanged.
+
 EXIF is currently written for discovered JPEG, PNG, HEIC/HEIF, AVIF, TIFF, and
 WebP files. Other recognized still or RAW formats retain corrected filesystem
 timestamps but are not promised embedded EXIF support.

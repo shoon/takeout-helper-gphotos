@@ -56,8 +56,19 @@ Successful placements are recorded in:
 <output>/.gphotos-manifest.json
 ```
 
-The key is the BLAKE3 content hash, not the temporary extraction path. Scratch
-paths change on every run, while content identity remains stable.
+Each primary media destination is recorded with its BLAKE3 content hash. Paths
+are stored relative to the output library, not relative to the directory where
+the command happened to run. This keeps the manifest usable after the library
+is moved or the command is launched from another directory.
+
+The current manifest format records each output path separately. Two files with
+identical bytes but different names therefore remain two verification targets.
+Existing version 1 manifests are loaded automatically and are saved in the
+current format after a successful run. Version 1 could retain only one path for
+each content hash, so it cannot reconstruct other names that had identical
+bytes. After upgrading from version 0.1.0, run once with `--force --verify` to
+rebuild a complete version 2 manifest. Existing byte-identical output files are
+reused and are not copied again.
 
 On the next run, content is skipped only when both conditions are true:
 
@@ -72,7 +83,9 @@ also safe, but every input file must then be hashed and reconsidered.
 
 ## Verification
 
-`--verify` re-hashes every output path recorded by the manifest. It reports:
+`--verify` re-hashes every primary media path recorded by the manifest. The
+verification stage has its own per-file progress counter and estimated time. It
+reports:
 
 - `missing` when the path no longer exists; and
 - `mismatched` when the bytes no longer match the recorded hash.

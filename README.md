@@ -104,6 +104,8 @@ commands.
   re-hashes the finished library.
 - Reports totals, writes problems to CSV, and returns a nonzero exit code when
   files need attention.
+- Shows each processing stage and per-file work for long-running metadata,
+  organization, and verification steps.
 - Stops cleanly on Ctrl+C while preserving the resume manifest and report.
 
 ## Default output
