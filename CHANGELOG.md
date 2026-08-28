@@ -5,6 +5,11 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+- Coordinate progress bars, status messages, and logs through one terminal
+  renderer so Windows window resizing and warnings do not overwrite live rows.
+- Size progress bars from the current terminal width and clear completed detail
+  rows instead of leaving stale cursor positions behind.
+
 - Show preparation, archive discovery, extraction, media discovery, sidecar
   pairing, Live Photo indexing, metadata writing, organization, verification,
   and finalization in the progress display.

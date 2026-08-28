@@ -7,7 +7,7 @@
 //! thin shim that parses CLI arguments, sets up logging and calls [`run`].
 
 use chrono::{DateTime, Utc};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::fs;
@@ -27,8 +27,9 @@ use crate::{archive, exif, manifest, metadata, organizer, stats, verify};
 pub const REPORT_FILE_NAME: &str = "takeout-helper-report.csv";
 
 const OVERALL_PROGRESS_TEMPLATE: &str =
-    "{spinner:.green} [{bar:18.cyan/blue}] {pos}/{len} stages complete | {msg}";
-const VERIFY_PROGRESS_TEMPLATE: &str = "  {spinner:.green} Verify [{bar:20.cyan/blue}] files {pos}/{len} | {elapsed_precise} | ETA {eta}";
+    "{spinner:.green} {pos}/{len} stages [{wide_bar:.cyan/blue}] {msg}";
+const VERIFY_PROGRESS_TEMPLATE: &str =
+    "  {spinner:.green} Verify {pos}/{len} [{wide_bar:.cyan/blue}] ETA {eta}";
 
 /// Configuration for a single run of the pipeline.
 ///
@@ -331,7 +332,7 @@ fn no_archives_message(input: &Path, recursive: bool) -> String {
 /// Run the full Google Photos takeout processing pipeline.
 pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> {
     // Initialize overall progress tracking
-    let multi_progress = MultiProgress::new();
+    let multi_progress = crate::progress::multi_progress();
     let verify_stage = config.verify && !config.dry_run;
     let stages = pipeline_stages(verify_stage);
     let overall_pb = multi_progress.add(ProgressBar::new(stages.len() as u64));
@@ -387,11 +388,11 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     info!("Output directory validated: {}", config.output.display());
 
     if config.dry_run {
-        println!(
+        crate::progress::println(format!(
             "DRY RUN: archives will be extracted to scratch space so the run can be planned, \
              but nothing will be written into {}.",
             config.output.display()
-        );
+        ));
         if config.verify {
             warn!("--verify does nothing during a --dry-run: there is no manifest to verify");
         }
@@ -438,7 +439,7 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
         overall_pb.finish_and_clear();
         let message = no_archives_message(&config.input, config.recursive);
         error!("{}", message);
-        eprintln!("\n{}\n", message);
+        crate::progress::eprintln(format!("\n{}\n", message));
         stats.total_processing_time = start_time.elapsed();
         stats::generate_summary(&stats);
         return Ok(RunOutcome::CompletedWithErrors(stats));
@@ -626,10 +627,10 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
         // rewrites them in place, and `--keep-temp` would then hand the user a
         // scratch directory that had been quietly altered.
         info!("Skipping the EXIF phase: --dry-run");
-        println!(
+        crate::progress::println(format!(
             "DRY RUN: metadata writes skipped ({} files paired)",
             media_metadata_pairs.len()
-        );
+        ));
     } else {
         match exif::write_exif_metadata_batch_with_tz(&media_metadata_pairs, config.timezone) {
             Ok(mut exif_summary) => {
@@ -987,28 +988,24 @@ fn finalize(
 
     if config.keep_temp {
         let kept = temp_dir.keep();
-        println!(
+        crate::progress::println(format!(
             "--keep-temp: extracted files left in {} (delete it yourself when done)",
             kept.display()
-        );
+        ));
     } else {
         drop(temp_dir);
     }
 
     overall_pb.inc(1);
-    if interrupted {
-        overall_pb.abandon_with_message("Run interrupted");
-    } else {
-        overall_pb.finish_with_message("Processing completed");
-    }
+    overall_pb.finish_and_clear();
 
     stats::generate_summary(stats);
 
     if interrupted {
-        println!(
+        crate::progress::println(format!(
             "Interrupted before completion. Media extensions searched: {}",
             MEDIA_EXTENSIONS.join(", ")
-        );
+        ));
     }
 }
 
@@ -1164,9 +1161,10 @@ mod tests {
     #[test]
     fn overall_progress_names_every_pipeline_stage() {
         assert!(OVERALL_PROGRESS_TEMPLATE.contains("{msg}"));
-        assert!(OVERALL_PROGRESS_TEMPLATE.contains("stages complete"));
+        assert!(OVERALL_PROGRESS_TEMPLATE.contains("{wide_bar"));
         assert!(!OVERALL_PROGRESS_TEMPLATE.contains("{eta}"));
-        assert!(VERIFY_PROGRESS_TEMPLATE.contains("files {pos}/{len}"));
+        assert!(VERIFY_PROGRESS_TEMPLATE.contains("Verify {pos}/{len}"));
+        assert!(VERIFY_PROGRESS_TEMPLATE.contains("{wide_bar"));
         assert!(VERIFY_PROGRESS_TEMPLATE.contains("ETA {eta}"));
         assert_eq!(
             pipeline_stages(true),

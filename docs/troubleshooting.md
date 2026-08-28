@@ -4,6 +4,19 @@ Start with the process exit code, the final summary, and
 `takeout-helper-report.csv` when present. Add `--log-level info` or `--verbose`
 for more detail; `RUST_LOG` takes precedence when it is set.
 
+## Progress rows overlap or redraw incorrectly
+
+Current builds coordinate every progress bar and log line through one terminal
+renderer. Bars use the current terminal width, so resizing Windows Terminal or
+PowerShell should redraw the active rows without leaving old text behind.
+Completed detail rows are cleared and their results remain available in the
+final summary.
+
+If a terminal still renders incorrectly, capture the terminal application and
+version, shell, initial and resized window widths, and whether a warning was
+printed at the same time. The final summary is plain text and remains the
+authoritative result.
+
 ## No archives were found
 
 Confirm that `--input` names a directory, not an individual archive. By default,

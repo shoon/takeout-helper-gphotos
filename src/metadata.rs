@@ -718,11 +718,11 @@ fn find_media_files_counted(
     let mut media_files = Vec::new();
 
     // Create a progress bar for file discovery
-    let discovery_pb = ProgressBar::new_spinner();
+    let discovery_pb = crate::progress::add(ProgressBar::new_spinner());
     discovery_pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", ""])
-            .template("  {spinner:.green} Media discovery | {msg}")?,
+            .template("  {spinner:.green} Media discovery | {wide_msg}")?,
     );
     discovery_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -746,7 +746,7 @@ fn find_media_files_counted(
         }
     }
 
-    discovery_pb.finish_with_message(format!("Found {} media files", media_files.len()));
+    discovery_pb.finish_and_clear();
 
     if *skipped > 0 {
         info!("Skipped {} files with non-media extensions", skipped);
@@ -775,11 +775,11 @@ pub fn pair_media_with_metadata(
     let mut cache: HashMap<PathBuf, Option<PhotoMetadata>> = HashMap::new();
 
     // Create a progress bar for pairing
-    let pairing_pb = ProgressBar::new(media_files.len() as u64);
+    let pairing_pb = crate::progress::add(ProgressBar::new(media_files.len() as u64));
     pairing_pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.green} Pair [{bar:20.cyan/blue}] files {pos}/{len} | {elapsed_precise} | ETA {eta}")?
-            .progress_chars("#>-")
+            .template("  {spinner:.green} Pair {pos}/{len} [{wide_bar:.cyan/blue}] ETA {eta}")?
+            .progress_chars("#>-"),
     );
 
     for media_file in media_files {
@@ -829,7 +829,7 @@ pub fn pair_media_with_metadata(
         pairing_pb.inc(1);
     }
 
-    pairing_pb.finish_with_message("All media files paired with metadata");
+    pairing_pb.finish_and_clear();
 
     // Any sidecar nobody claimed is an orphan worth reporting.
     let orphans: Vec<&PathBuf> = indexes

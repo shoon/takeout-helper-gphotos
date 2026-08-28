@@ -10,7 +10,7 @@
 
 use filetime::FileTime;
 use flate2::read::GzDecoder;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rand::{RngExt, distr::Alphanumeric};
 use rayon::prelude::*;
@@ -444,11 +444,11 @@ impl Drop for TempDir {
             // Defense in depth: never `remove_dir_all` a directory the user
             // handed us, even when its name resembles one of our scratch dirs.
             // Better to leak a scratch dir than to delete data.
-            eprintln!(
+            crate::progress::eprintln(format!(
                 "Warning: refusing to delete temporary directory {} (name does not start with '{}')",
                 self.path.display(),
                 TEMP_DIR_PREFIX
-            );
+            ));
             return;
         }
 
@@ -458,11 +458,11 @@ impl Drop for TempDir {
 
         if let Err(e) = fs::remove_dir_all(&self.path) {
             // We use eprintln here because we can't use the log crate during drop
-            eprintln!(
+            crate::progress::eprintln(format!(
                 "Warning: Failed to remove temporary directory {}: {}",
                 self.path.display(),
                 e
-            );
+            ));
         }
     }
 }
@@ -485,11 +485,11 @@ pub fn find_archive_files(
     let mut archive_files = Vec::new();
 
     // Create a progress bar for file discovery
-    let discovery_pb = ProgressBar::new_spinner();
+    let discovery_pb = crate::progress::add(ProgressBar::new_spinner());
     discovery_pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", ""])
-            .template("  {spinner:.green} Archive discovery | {msg}")?,
+            .template("  {spinner:.green} Archive discovery | {wide_msg}")?,
     );
     discovery_pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -513,7 +513,7 @@ pub fn find_archive_files(
         }
     }
 
-    discovery_pb.finish_with_message(format!("Found {} archive files", archive_files.len()));
+    discovery_pb.finish_and_clear();
 
     if archive_files.is_empty() {
         warn!(
@@ -525,10 +525,10 @@ pub fn find_archive_files(
                 " (non-recursive - try --recursive)"
             }
         );
-        eprintln!(
+        crate::progress::eprintln(format!(
             "Warning: no archives found in {} - nothing to do.",
             input_path.display()
-        );
+        ));
     }
 
     Ok(archive_files)
@@ -536,9 +536,9 @@ pub fn find_archive_files(
 
 /// Build a progress bar used for a standalone (non-batched) extraction.
 fn standalone_progress_bar(label: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    if let Ok(style) = ProgressStyle::default_spinner()
-        .template("  {spinner:.green} Extracting {msg} | {pos} entries | {elapsed_precise} elapsed")
+    let pb = crate::progress::add(ProgressBar::new_spinner());
+    if let Ok(style) =
+        ProgressStyle::default_spinner().template("  {spinner:.green} {pos} entries | {wide_msg}")
     {
         pb.set_style(style);
     }
@@ -934,11 +934,11 @@ pub fn extract_archives(
 
     let limits = Limits::new(max_file_size, max_archive_size, max_files);
 
-    let multi = MultiProgress::new();
+    let multi = crate::progress::multi_progress();
     let overall = multi.add(ProgressBar::new(archive_files.len() as u64));
-    if let Ok(style) = ProgressStyle::default_bar().template(
-        "  {spinner:.green} Archives [{bar:20.cyan/blue}] {pos}/{len} | {elapsed_precise} | ETA {eta}",
-    ) {
+    if let Ok(style) = ProgressStyle::default_bar()
+        .template("  {spinner:.green} Archives {pos}/{len} [{wide_bar:.cyan/blue}] ETA {eta}")
+    {
         overall.set_style(style.progress_chars("#>-"));
     }
 
@@ -946,9 +946,9 @@ pub fn extract_archives(
         .into_par_iter()
         .map(|archive_file| {
             let pb = multi.add(ProgressBar::new_spinner());
-            if let Ok(style) = ProgressStyle::default_spinner().template(
-                "  {spinner:.green} Extracting {msg} | {pos} entries | {elapsed_precise} elapsed",
-            ) {
+            if let Ok(style) = ProgressStyle::default_spinner()
+                .template("  {spinner:.green} {pos} entries | {wide_msg}")
+            {
                 pb.set_style(style);
             }
             pb.set_message(
@@ -986,12 +986,7 @@ pub fn extract_archives(
         })
         .collect();
 
-    let failures = results.iter().filter(|(_, r)| r.is_err()).count();
-    overall.finish_with_message(format!(
-        "{} archives extracted, {} failed",
-        results.len() - failures,
-        failures
-    ));
+    overall.finish_and_clear();
 
     results
 }
@@ -1137,7 +1132,7 @@ pub fn report_split_archives(groups: &[ArchiveGroup]) {
                 group.part_numbers.len() + group.missing.len()
             );
             warn!("{}", message);
-            eprintln!("\nWARNING: {}\n", message);
+            crate::progress::eprintln(format!("\nWARNING: {}\n", message));
         }
     }
 }

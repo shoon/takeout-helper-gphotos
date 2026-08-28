@@ -8,6 +8,7 @@ pub mod exif;
 pub mod manifest;
 pub mod metadata;
 pub mod organizer;
+pub mod progress;
 pub mod stats;
 pub mod verify;
 
@@ -43,7 +44,7 @@ pub fn install_shutdown_handler() -> Result<(), ctrlc::Error> {
     }
     ctrlc::set_handler(|| {
         SHUTDOWN.store(true, Ordering::SeqCst);
-        println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+        progress::println("\nReceived Ctrl+C, initiating graceful shutdown...");
     })
 }
 

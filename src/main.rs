@@ -8,6 +8,7 @@ use std::process;
 
 use takeout_helper_gphotos::app::{self, AppConfig};
 use takeout_helper_gphotos::organizer::OrganizeMode;
+use takeout_helper_gphotos::progress::ProgressLogger;
 
 /// The output layout `--organize` selects.
 ///
@@ -308,7 +309,11 @@ fn main() {
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level));
     builder.filter_module("little_exif::metadata", log::LevelFilter::Off);
-    builder.init();
+    let logger = builder.build();
+    let max_level = logger.filter();
+    log::set_boxed_logger(Box::new(ProgressLogger::new(logger)))
+        .expect("logging should be initialized only once");
+    log::set_max_level(max_level);
 
     if args.verbose && args.log_level != LogLevel::Warn {
         warn!(
