@@ -215,8 +215,8 @@ impl std::error::Error for OrganizerError {}
 /// The resolved capture date of a media file.
 ///
 /// `Unknown` means no *trustworthy* date exists: no sidecar timestamp, no Live
-/// Photo mapping, and no meaningful filesystem mtime. Such files are filed under
-/// [`UNKNOWN_DATE_DIR`] instead of being dumped into the current month.
+/// Photo mapping, and no meaningful filesystem mtime. Date-based layouts use
+/// [`UNKNOWN_DATE_DIR`]; flat and album layouts keep their own placement rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhotoDate {
     Known(DateTime<Utc>),
@@ -273,6 +273,7 @@ impl Disposition {
             self,
             Disposition::Organized
                 | Disposition::Duplicate
+                | Disposition::Resumed
                 | Disposition::Planned
                 | Disposition::PlannedDuplicate
         )
@@ -342,7 +343,7 @@ pub struct OrganizeSummary {
     pub organized: usize,
     /// Files skipped because a byte-identical copy was already present.
     pub duplicates_skipped: usize,
-    /// Files filed under `unknown-date/` (a subset of the files placed).
+    /// Placed files whose capture date could not be resolved.
     pub unknown_date: usize,
     /// Files skipped because the manifest says an earlier run already
     /// organized them and the recorded output file is still there.
@@ -364,6 +365,10 @@ pub struct OrganizeSummary {
     pub warnings: Vec<(PathBuf, String)>,
     /// Sources skipped by `--skip-derivatives`, for the report.
     pub derivatives: Vec<PathBuf>,
+    /// (source, destination) for every placed file whose date could not be
+    /// resolved, so the report can list them in every layout (flat mode has no
+    /// `unknown-date/` directory to match destinations against).
+    pub undated: Vec<(PathBuf, PathBuf)>,
     /// source -> destination mapping for every file that ended up in the output
     /// tree (including skipped duplicates and resumed files).
     pub destinations: Vec<(PathBuf, PathBuf)>,
@@ -406,6 +411,7 @@ impl OrganizeSummary {
         // Only count a file as undated when its date was actually resolved.
         if disposition.places_a_file() && !date.is_known() {
             self.unknown_date += 1;
+            self.undated.push((source.clone(), destination.clone()));
         }
 
         self.album_copies += album_copies.len();
@@ -734,6 +740,7 @@ pub fn organize_one(
     // hash, not the path: the source lives in a scratch directory whose name is
     // different every run.
     let mut source_hash: Option<[u8; 32]> = None;
+    let mut resumed_destination: Option<PathBuf> = None;
     if let Some(manifest) = options.resume {
         match hash_file_cached(&source, Some(context)) {
             Ok(hash) => {
@@ -744,10 +751,7 @@ pub fn organize_one(
                         source.display(),
                         destination.display()
                     );
-                    let mut outcome =
-                        FileOutcome::skipped(source, destination, Disposition::Resumed);
-                    outcome.hash = Some(hex);
-                    return Ok(outcome);
+                    resumed_destination = Some(destination);
                 }
                 source_hash = Some(hash);
             }
@@ -764,6 +768,22 @@ pub fn organize_one(
 
     // Extract the date for the file
     let (file_path, date) = extract_photo_date(pair, live_photo_dates)?;
+
+    // Resume still resolves the date. Undated files remain actionable on later
+    // runs, so their report rows must not disappear merely because the manifest
+    // let us skip copying their bytes.
+    if let Some(destination) = resumed_destination {
+        return Ok(FileOutcome {
+            source: file_path,
+            destination,
+            date,
+            disposition: Disposition::Resumed,
+            hash: source_hash.map(|hash| crate::dedup::hash_to_hex(&hash)),
+            album_copies: Vec::new(),
+            sidecars: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
 
     let album = options
         .extract_root
@@ -1063,10 +1083,12 @@ pub fn extract_photo_date(
     }
 
     // Check 2 (Live Photo): a video with no usable sidecar of its own borrows
-    // the date of the still image sitting next to it with the same stem.
+    // the date of the still image sitting next to it with the same stem. The
+    // extension list is the one sidecar pairing uses, so the two rules agree
+    // on what counts as a Live Photo video.
     if let Some(extension) = path.extension() {
         let ext_str = extension.to_string_lossy().to_lowercase();
-        if (ext_str == "mp4" || ext_str == "mov")
+        if crate::metadata::LIVE_PHOTO_VIDEO_EXTENSIONS.contains(&ext_str.as_str())
             && let Some(&date) = live_photo_dates.get(&live_photo_key(&path))
         {
             return Ok((path, PhotoDate::Known(date)));
@@ -1724,6 +1746,51 @@ mod tests {
         let pair = MediaMetadataPair::WithoutMetadata(PathBuf::from("/nonexistent/nope.jpg"));
         let (_, date) = extract_photo_date(pair, &HashMap::new()).unwrap();
         assert_eq!(date, PhotoDate::Unknown);
+    }
+
+    /// Every Live Photo video extension the pairing rules accept must also be
+    /// able to borrow a date from the map, not just mp4 and mov.
+    #[test]
+    fn test_m4v_video_uses_the_live_photo_map() {
+        let mut map: LivePhotoDates = HashMap::new();
+        map.insert(
+            live_photo_key(Path::new("/t/a/IMG_0005.m4v")),
+            DateTime::<Utc>::from_timestamp(1420070400, 0).unwrap(),
+        );
+
+        let pair = MediaMetadataPair::WithoutMetadata(PathBuf::from("/t/a/IMG_0005.m4v"));
+        let (_, date) = extract_photo_date(pair, &map).unwrap();
+        assert_eq!(date.known().unwrap().timestamp(), 1420070400);
+    }
+
+    /// Flat mode has no unknown-date/ directory, so undated files must be
+    /// tracked directly for the report instead of by destination prefix.
+    #[test]
+    fn test_flat_mode_tracks_undated_files_for_the_report() {
+        let src_dir = TempDir::new().unwrap();
+        let out_dir = TempDir::new().unwrap();
+
+        // Freshly created means a "now-ish" mtime and no meaningful date.
+        let media_file = src_dir.path().join("undated.jpg");
+        fs::write(&media_file, "content").unwrap();
+
+        let options = OrganizeOptions {
+            mode: OrganizeMode::Flat,
+            ..OrganizeOptions::default()
+        };
+        let summary = organize_media_files_with_options(
+            vec![MediaMetadataPair::WithoutMetadata(media_file.clone())],
+            out_dir.path(),
+            &HashMap::new(),
+            &options,
+        )
+        .unwrap();
+
+        assert_eq!(summary.unknown_date, 1);
+        assert_eq!(
+            summary.undated,
+            vec![(media_file, out_dir.path().join("undated.jpg"))]
+        );
     }
 
     #[test]

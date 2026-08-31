@@ -58,7 +58,7 @@ pub struct ProcessingStats {
     pub files_organized: usize,
     /// Files skipped because a byte-identical copy was already present.
     pub duplicates_skipped: usize,
-    /// Files filed under `unknown-date/` (a subset of `files_organized`).
+    /// Placed files whose capture date could not be resolved.
     pub unknown_date: usize,
     /// Files that could not be organized.
     pub organize_failures: usize,
@@ -136,6 +136,64 @@ fn format_duration(d: std::time::Duration) -> String {
     } else {
         format!("{:.1}s", d.as_secs_f64())
     }
+}
+
+/// Layout-aware explanation of where files without trustworthy dates went.
+/// Kept separate from printing so the wording can be tested directly.
+fn undated_output_lines(stats: &ProcessingStats) -> Vec<String> {
+    if stats.unknown_date == 0 {
+        return Vec::new();
+    }
+
+    let report_hint = (!stats.dry_run)
+        .then_some(stats.report_path.as_ref())
+        .flatten()
+        .map(|path| format!("  Exact files and destinations: {}", path.display()));
+
+    let mut lines = match stats.organize_mode {
+        Some("date" | "date-album") => vec![
+            format!(
+                "  {} file(s) had no trustworthy date and {} filed under:",
+                stats.unknown_date,
+                if stats.dry_run { "would be" } else { "were" }
+            ),
+            format!(
+                "      {}",
+                stats
+                    .output_dir
+                    .join(crate::organizer::UNKNOWN_DATE_DIR)
+                    .display()
+            ),
+        ],
+        Some("flat") => vec![format!(
+            "  {} file(s) had no trustworthy date and {} in the library root.",
+            stats.unknown_date,
+            if stats.dry_run {
+                "would remain"
+            } else {
+                "remain"
+            }
+        )],
+        Some("album") => vec![format!(
+            "  {} file(s) had no trustworthy date and {} the album layout \
+             (album folder or unknown-date fallback).",
+            stats.unknown_date,
+            if stats.dry_run {
+                "would follow"
+            } else {
+                "follow"
+            }
+        )],
+        _ => vec![format!(
+            "  {} file(s) had no trustworthy date.",
+            stats.unknown_date
+        )],
+    };
+
+    if let Some(hint) = report_hint {
+        lines.push(hint);
+    }
+    lines
 }
 
 /// Generate the end-of-run summary report.
@@ -250,7 +308,7 @@ pub fn generate_summary(stats: &ProcessingStats) {
         );
     }
     println!(
-        "  filed as unknown-date     : {}  (subset of the files above)",
+        "  without trustworthy date : {}  (subset of the files above)",
         stats.unknown_date
     );
     println!("  FAILED                    : {}", stats.organize_failures);
@@ -270,19 +328,8 @@ pub fn generate_summary(stats: &ProcessingStats) {
     if let Some(path) = &stats.manifest_path {
         println!("  resume manifest           : {}", path.display());
     }
-    if stats.unknown_date > 0 {
-        println!(
-            "  {} file(s) had no trustworthy date and {} filed under:",
-            stats.unknown_date,
-            if stats.dry_run { "would be" } else { "were" }
-        );
-        println!(
-            "      {}",
-            stats
-                .output_dir
-                .join(crate::organizer::UNKNOWN_DATE_DIR)
-                .display()
-        );
+    for line in undated_output_lines(stats) {
+        println!("{}", line);
     }
 
     println!(
@@ -374,6 +421,54 @@ mod tests {
         };
         generate_summary(&stats);
         assert!(!stats.has_failures());
+    }
+
+    /// The flat layout keeps undated files in the library root, and the
+    /// summary must not point at an unknown-date/ directory that was never
+    /// created.
+    #[test]
+    fn flat_mode_summary_does_not_panic() {
+        let stats = ProcessingStats {
+            organize_mode: Some("flat"),
+            files_organized: 3,
+            unknown_date: 2,
+            ..Default::default()
+        };
+        generate_summary(&stats);
+        assert!(!stats.has_failures());
+    }
+
+    #[test]
+    fn undated_summary_respects_layout_and_dry_run() {
+        let flat_dry_run = ProcessingStats {
+            dry_run: true,
+            organize_mode: Some("flat"),
+            unknown_date: 2,
+            output_dir: PathBuf::from("library"),
+            ..Default::default()
+        };
+        let flat_lines = undated_output_lines(&flat_dry_run);
+        assert_eq!(
+            flat_lines,
+            vec!["  2 file(s) had no trustworthy date and would remain in the library root."]
+        );
+        assert!(
+            flat_lines
+                .iter()
+                .all(|line| !line.contains(crate::app::REPORT_FILE_NAME)),
+            "a dry run must not point at a report it never writes"
+        );
+
+        let album = ProcessingStats {
+            organize_mode: Some("album"),
+            unknown_date: 1,
+            output_dir: PathBuf::from("library"),
+            report_path: Some(PathBuf::from("report.csv")),
+            ..Default::default()
+        };
+        let album_lines = undated_output_lines(&album);
+        assert!(album_lines[0].contains("album folder or unknown-date fallback"));
+        assert_eq!(album_lines[1], "  Exact files and destinations: report.csv");
     }
 
     #[test]

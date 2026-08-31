@@ -5,6 +5,25 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+- Extract parallel Takeout shards into isolated scratch subtrees so repeated
+  paths cannot race and every media file stays with the sidecar from its own
+  shard; repeated names within one archive are still preserved as numbered
+  siblings instead of truncating an earlier entry.
+- Atomically account for space other archives have already reserved when
+  parallel extractions run their pre-flight disk-space checks.
+- Delete a stale `takeout-helper-report.csv` when a later run finishes with
+  nothing to report.
+- Keep a metadata write counted as successful when the embedded write worked
+  and only the follow-up modification-time update failed.
+- Share one set of Live Photo extension lists between sidecar pairing, the
+  Live Photo date map, and date resolution, so PNG stills and M4V/3GP videos
+  are covered everywhere.
+- List undated files in the CSV report for every layout and on resumed runs,
+  and describe their destinations accurately for date, album, flat, and dry-run
+  layouts.
+- Report a failed Ctrl+C handler installation as a warning instead of
+  aborting, and let a later attempt see the real error.
+
 - Coordinate progress bars, status messages, and logs through one terminal
   renderer so Windows window resizing and warnings do not overwrite live rows.
 - Replace graphical bars with compact animated spinners, numbered processing

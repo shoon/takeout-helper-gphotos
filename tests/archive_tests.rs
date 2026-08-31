@@ -220,11 +220,20 @@ fn test_extract_multiple_archives_into_same_dir() {
         assert!(result.is_ok(), "{} failed: {:?}", path.display(), result);
     }
 
+    let extracted: Vec<_> = walkdir::WalkDir::new(&extract_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .collect();
     for i in 0..3 {
+        let suffix = Path::new("Takeout")
+            .join("Google Photos")
+            .join(format!("IMG_{}.jpg", i));
         assert!(
-            extract_dir
-                .join(format!("Takeout/Google Photos/IMG_{}.jpg", i))
-                .exists()
+            extracted.iter().any(|path| path.ends_with(&suffix)),
+            "missing {} beneath isolated archive trees",
+            suffix.display()
         );
     }
 }

@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use crate::archive::ArchiveError;
 use crate::exif::escape_csv_field;
 use crate::manifest::Manifest;
-use crate::metadata::{MEDIA_EXTENSIONS, MediaMetadataPair};
-use crate::organizer::{LivePhotoDates, OrganizeMode, UNKNOWN_DATE_DIR, live_photo_key};
+use crate::metadata::{LIVE_PHOTO_STILL_EXTENSIONS, MEDIA_EXTENSIONS, MediaMetadataPair};
+use crate::organizer::{LivePhotoDates, OrganizeMode, live_photo_key};
 use crate::stats::ProcessingStats;
 use crate::{archive, exif, manifest, metadata, organizer, stats, verify};
 
@@ -184,9 +184,6 @@ fn sidecar_date(pair: &MediaMetadataPair) -> Option<DateTime<Utc>> {
 fn build_live_photo_dates_map(media_metadata_pairs: &[MediaMetadataPair]) -> LivePhotoDates {
     let mut live_photo_dates: LivePhotoDates = HashMap::new();
 
-    // Extensions that can be the still half of a Live Photo.
-    const PRIMARY_PHOTO_EXTENSIONS: &[&str] = &["heic", "heif", "jpg", "jpeg"];
-
     for pair in media_metadata_pairs {
         let path = match pair {
             MediaMetadataPair::WithMetadata(path, ..) => path,
@@ -197,7 +194,7 @@ fn build_live_photo_dates_map(media_metadata_pairs: &[MediaMetadataPair]) -> Liv
             continue;
         };
         let ext_str = extension.to_string_lossy().to_lowercase();
-        if !PRIMARY_PHOTO_EXTENSIONS.contains(&ext_str.as_str()) {
+        if !LIVE_PHOTO_STILL_EXTENSIONS.contains(&ext_str.as_str()) {
             continue;
         }
 
@@ -288,17 +285,26 @@ fn parse_optional_size(
 /// Write the per-file report CSV, returning its path when anything was written.
 ///
 /// Every row is a file that needs the user's attention: a failure in any phase,
-/// or a file that had to be filed under `unknown-date/`.
+/// or a file whose capture date could not be resolved.
 ///
 /// `unknown-date` and failure rows carry the **output** path wherever one is
 /// known, because the temporary extraction directory is deleted at the end of
 /// the run and its paths are useless to the reader.
 fn write_report(output_dir: &Path, rows: &[ReportRow]) -> std::io::Result<Option<PathBuf>> {
+    let path = output_dir.join(REPORT_FILE_NAME);
+
     if rows.is_empty() {
+        // A clean run must not leave the previous run's report behind, or the
+        // summary would say "no failures" while an outdated CSV full of them
+        // still sits in the output directory.
+        match fs::remove_file(&path) {
+            Ok(()) => info!("Removed the stale report {}", path.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
         return Ok(None);
     }
 
-    let path = output_dir.join(REPORT_FILE_NAME);
     let mut file = fs::File::create(&path)?;
     writeln!(file, "phase,source,destination,detail")?;
     for row in rows {
@@ -353,8 +359,16 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     overall_pb.enable_steady_tick(Duration::from_millis(120));
     overall_pb.set_message(stages[0]);
 
-    // Set up signal handler for Ctrl+C
-    crate::install_shutdown_handler().expect("Error setting Ctrl+C handler");
+    // Set up the Ctrl+C handler. Its absence degrades interruption behaviour
+    // but must not abort the run (or panic inside a library embedder that has
+    // its own handler).
+    if let Err(e) = crate::install_shutdown_handler() {
+        warn!(
+            "Could not install the Ctrl+C handler: {}. An interrupt will abort without \
+             saving the resume manifest.",
+            e
+        );
+    }
 
     // Pin the run-start instant so that mtimes written later in this run are
     // recognised as meaningless (see organizer::meaningful_filesystem_date).
@@ -713,9 +727,9 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
     let options = organizer::OrganizeOptions {
         mode: config.organize,
         // Album names come from the folder each file sits in *under the
-        // extraction root. Every archive is extracted into this one scratch
-        // directory, so the `Takeout/Google Photos/<folder>` structure is
-        // relative to it.
+        // extraction root. Archives use isolated shard subtrees below this
+        // scratch directory, but the immediate parent remains the Takeout
+        // `<folder>` whose name determines album membership.
         extract_root: Some(temp_dir.path()),
         dry_run: config.dry_run,
         dedup: !config.no_dedup,
@@ -816,18 +830,16 @@ pub fn run(config: AppConfig) -> Result<RunOutcome, Box<dyn std::error::Error>> 
 
             // Undated files, reported by their FINAL location. The old CSV
             // listed temp paths that were deleted before the user could read
-            // them.
-            let unknown_dir = config.output.join(UNKNOWN_DATE_DIR);
-            for (source, destination) in &summary.destinations {
-                if destination.starts_with(&unknown_dir) {
-                    report_rows.push(ReportRow {
-                        phase: "unknown-date",
-                        source: source.display().to_string(),
-                        destination: destination.display().to_string(),
-                        detail: "No trustworthy capture date; filed under unknown-date/"
-                            .to_string(),
-                    });
-                }
+            // them. The organizer tracks these directly, so the rows cover
+            // every layout, including flat, where there is no unknown-date/
+            // directory to match on.
+            for (source, destination) in &summary.undated {
+                report_rows.push(ReportRow {
+                    phase: "unknown-date",
+                    source: source.display().to_string(),
+                    destination: destination.display().to_string(),
+                    detail: "No trustworthy capture date; review this file by hand".to_string(),
+                });
             }
         }
         Err(e) => {
@@ -1102,6 +1114,18 @@ mod tests {
         );
     }
 
+    /// PNG can be the still half of a motion photo, and the date map must use
+    /// the same still-extension list the sidecar pairing rules use.
+    #[test]
+    fn live_photo_map_accepts_png_stills() {
+        let pairs = vec![pair_with("/t/a/MVIMG_0001.png", Some("1420070400"))];
+        let map = build_live_photo_dates_map(&pairs);
+        assert_eq!(
+            map[&live_photo_key(Path::new("/t/a/MVIMG_0001.mp4"))].timestamp(),
+            1420070400
+        );
+    }
+
     #[test]
     fn live_photo_map_only_takes_sidecar_dates() {
         // A still with no sidecar contributes nothing, preventing mtime
@@ -1158,6 +1182,21 @@ mod tests {
         assert!(body.starts_with("phase,source,destination,detail\n"));
         assert!(body.contains("\"/tmp/a,b.jpg\""));
         assert!(body.contains("'=cmd"));
+    }
+
+    /// A run with nothing to report must remove the report a previous failing
+    /// run wrote, or the "no failures" summary would sit next to a stale CSV.
+    #[test]
+    fn empty_report_removes_a_stale_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(REPORT_FILE_NAME);
+        fs::write(&stale, "phase,source,destination,detail\nold,row,,").unwrap();
+
+        assert!(write_report(dir.path(), &[]).unwrap().is_none());
+        assert!(!stale.exists(), "the stale report must be deleted");
+
+        // Absent report plus empty rows stays a no-op.
+        assert!(write_report(dir.path(), &[]).unwrap().is_none());
     }
 
     #[test]

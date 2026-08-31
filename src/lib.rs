@@ -36,16 +36,22 @@ pub fn request_shutdown() {
 ///
 /// Idempotent: the underlying `ctrlc` crate allows exactly one handler per
 /// process, so a second [`run`] in the same process (a test binary, or a
-/// library consumer processing several takeouts) must not fail here.
+/// library consumer processing several takeouts) must not fail here. A failed
+/// installation is not remembered as installed, so every call reports the real
+/// error instead of the first failure being silently swallowed.
 pub fn install_shutdown_handler() -> Result<(), ctrlc::Error> {
     static INSTALLED: AtomicBool = AtomicBool::new(false);
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
-    ctrlc::set_handler(|| {
+    let result = ctrlc::set_handler(|| {
         SHUTDOWN.store(true, Ordering::SeqCst);
         progress::println("\nReceived Ctrl+C, initiating graceful shutdown...");
-    })
+    });
+    if result.is_err() {
+        INSTALLED.store(false, Ordering::SeqCst);
+    }
+    result
 }
 
 // Re-export commonly used items for integration testing and library consumers

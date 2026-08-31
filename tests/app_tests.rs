@@ -36,15 +36,38 @@ fn write_zip(path: &Path, entries: &[(String, Vec<u8>)]) {
     zip.finish().unwrap();
 }
 
+/// Build a zip whose entries all carry a chosen archive mtime.
+fn write_zip_at(path: &Path, entries: &[(String, Vec<u8>)], modified: zip::DateTime) {
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    for (name, contents) in entries {
+        zip.start_file(
+            name.as_str(),
+            SimpleFileOptions::default().last_modified_time(modified),
+        )
+        .unwrap();
+        zip.write_all(contents).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
 /// A media entry plus its `.supplemental-metadata.json` sidecar, under
 /// `Takeout/Google Photos/<folder>/`.
 fn takeout_entries(folder: &str, name: &str, contents: &str) -> Vec<(String, Vec<u8>)> {
+    takeout_entries_at(folder, name, contents, TAKEN_AT)
+}
+
+fn takeout_entries_at(
+    folder: &str,
+    name: &str,
+    contents: &str,
+    taken_at: &str,
+) -> Vec<(String, Vec<u8>)> {
     let base = format!("Takeout/Google Photos/{}/{}", folder, name);
     vec![
         (base.clone(), contents.as_bytes().to_vec()),
         (
             format!("{}.supplemental-metadata.json", base),
-            format!(r#"{{"photoTakenTime": {{"timestamp": "{}"}}}}"#, TAKEN_AT)
+            format!(r#"{{"photoTakenTime": {{"timestamp": "{}"}}}}"#, taken_at)
                 .as_bytes()
                 .to_vec(),
         ),
@@ -187,6 +210,82 @@ fn a_second_run_resumes_from_the_manifest() {
             .count(),
         2,
         "no run may duplicate the library"
+    );
+}
+
+/// Shards can repeat the same logical path. Their media and sidecars must stay
+/// together so parallel extraction cannot assign one shard's date to another.
+#[test]
+fn colliding_shards_keep_media_with_their_own_sidecars() {
+    let mut first_entries =
+        takeout_entries_at("Holiday", "IMG_0001.mp4", "first shard media", "1609459200");
+    first_entries.push((
+        "Takeout/Google Photos/Holiday/metadata.json".to_string(),
+        br#"{"title":"first"}"#.to_vec(),
+    ));
+    let fixture = Fixture::new(first_entries);
+
+    let mut second_entries = takeout_entries_at(
+        "Holiday",
+        "IMG_0001.mp4",
+        "second shard media",
+        "1640995200",
+    );
+    second_entries.push((
+        "Takeout/Google Photos/Holiday/metadata.json".to_string(),
+        br#"{"title":"second"}"#.to_vec(),
+    ));
+    write_zip(
+        &fixture.input.join("takeout-20210101T000000Z-002.zip"),
+        &second_entries,
+    );
+
+    let outcome = fixture.run(fixture.config());
+    let stats = outcome.stats();
+    assert_eq!(stats.archives_extracted, 2);
+    assert_eq!(stats.media_files_found, 2);
+    assert_eq!(stats.metadata_json_files_found, 2);
+    assert_eq!(stats.orphan_sidecars, 0);
+    assert_eq!(
+        std::fs::read_to_string(fixture.output.join("2021/01/IMG_0001.mp4")).unwrap(),
+        "first shard media"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.output.join("2022/01/IMG_0001.mp4")).unwrap(),
+        "second shard media"
+    );
+}
+
+/// A resumed undated file is still actionable and must keep its report row on
+/// a later run instead of triggering stale-report deletion.
+#[test]
+fn resumed_undated_file_keeps_the_report() {
+    let fixture = Fixture::new(Vec::new());
+    let media_path = "Takeout/Google Photos/Photos from 2099/UNDATED.mp4";
+    let future = zip::DateTime::from_date_and_time(2099, 1, 1, 0, 0, 0).unwrap();
+    write_zip_at(
+        &fixture.input.join("takeout-20210101T000000Z-001.zip"),
+        &[(media_path.to_string(), b"undated media".to_vec())],
+        future,
+    );
+
+    let first = fixture.run(fixture.config());
+    assert_eq!(first.stats().unknown_date, 1);
+    let first_report = first.stats().report_path.as_ref().unwrap();
+    assert!(
+        std::fs::read_to_string(first_report)
+            .unwrap()
+            .contains("unknown-date")
+    );
+
+    let second = fixture.run(fixture.config());
+    assert_eq!(second.stats().resumed_skips, 1);
+    assert_eq!(second.stats().unknown_date, 1);
+    let second_report = second.stats().report_path.as_ref().unwrap();
+    assert!(
+        std::fs::read_to_string(second_report)
+            .unwrap()
+            .contains("unknown-date")
     );
 }
 
