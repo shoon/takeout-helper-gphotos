@@ -1526,7 +1526,7 @@ Apache License 2.0
 ================================================================================
 
 Used by:
-- takeout-helper-gphotos 0.1.0 (https://github.com/shoon/takeout-helper-gphotos)
+- takeout-helper-gphotos 0.1.1 (https://github.com/shoon/takeout-helper-gphotos)
 - little_exif 0.6.23+security.1 (https://github.com/TechnikTobi/little_exif)
 
 License text:
@@ -2389,7 +2389,7 @@ Apache License 2.0
 ================================================================================
 
 Used by:
-- takeout-helper-gphotos 0.1.0 (https://github.com/shoon/takeout-helper-gphotos)
+- takeout-helper-gphotos 0.1.1 (https://github.com/shoon/takeout-helper-gphotos)
 
 License text:
 
