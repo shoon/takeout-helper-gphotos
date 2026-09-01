@@ -28,9 +28,23 @@ Your downloaded archives are never modified. Existing output files are never
 overwritten, and a dry run lets you inspect the plan before committing to a
 large migration.
 
-## Download
+## Install
 
-Download the latest build from [GitHub Releases](https://github.com/shoon/takeout-helper-gphotos/releases/latest).
+On macOS or Linux with Homebrew:
+
+```bash
+brew install shoon/tap/takeout-helper-gphotos
+```
+
+On Windows with Scoop:
+
+```powershell
+scoop bucket add shoon https://github.com/shoon/scoop-bucket
+scoop install shoon/takeout-helper-gphotos
+```
+
+For a manual installation, download the latest build from
+[GitHub Releases](https://github.com/shoon/takeout-helper-gphotos/releases/latest).
 
 | Platform | Release archive |
 | --- | --- |
@@ -49,11 +63,13 @@ The binaries are not currently code signed; verify `SHA256SUMS.txt` before use.
 
 1. In Google Takeout, create an export containing Google Photos. Download every
    Takeout archive part into one directory, such as `takeout-downloads/`.
-2. Download the `takeout-helper-gphotos` release for your operating system from
+2. Install `takeout-helper-gphotos` with Homebrew or Scoop using the commands
+   above, or download the release for your operating system from
    [GitHub Releases](https://github.com/shoon/takeout-helper-gphotos/releases/latest).
-3. Extract the downloaded **takeout-helper-gphotos release** (`.zip` or
-   `.tar.gz`) into a tools directory. Leave the Google Takeout archives as they
-   were downloaded. The application extracts them during processing.
+3. For a manual installation, extract the downloaded **takeout-helper-gphotos
+   release** (`.zip` or `.tar.gz`) into a tools directory. Leave the Google
+   Takeout archives as they were downloaded. The application extracts them
+   during processing.
 4. Keep the Takeout downloads as your source backup and choose a separate,
    empty directory for the organized photo library.
 5. Run a dry run first:

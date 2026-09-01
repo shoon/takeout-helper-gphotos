@@ -21,13 +21,27 @@ numbered series has a gap.
 Keep the original downloads until the finished library has been inspected,
 verified, and backed up somewhere else.
 
-## 2. Download and verify the program
+## 2. Install the program
 
-Choose the archive for your CPU and operating system from
+On macOS or Linux with Homebrew:
+
+```bash
+brew install shoon/tap/takeout-helper-gphotos
+```
+
+On Windows with Scoop:
+
+```powershell
+scoop bucket add shoon https://github.com/shoon/scoop-bucket
+scoop install shoon/takeout-helper-gphotos
+```
+
+For a manual installation, choose the archive for your CPU and operating
+system from
 [GitHub Releases](https://github.com/shoon/takeout-helper-gphotos/releases/latest).
 Download `SHA256SUMS.txt` from the same release.
 
-On Linux or macOS, verify all downloaded release assets in the directory:
+On Linux or macOS, verify manually downloaded release assets in the directory:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
@@ -43,32 +57,40 @@ On Windows PowerShell, compare the printed hash with the matching line in
 `SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash .\takeout-helper-gphotos-v0.1.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\takeout-helper-gphotos-vX.Y.Z-windows-x64.zip -Algorithm SHA256
 ```
 
 Do not run an asset whose checksum differs.
 
-## 3. Extract and test the binary
+## 3. Test the installation
+
+For Homebrew or Scoop, confirm the installed command is available:
+
+```text
+takeout-helper-gphotos --version
+```
+
+For a manual installation, extract and test the downloaded binary.
 
 Windows PowerShell:
 
 ```powershell
-Expand-Archive .\takeout-helper-gphotos-v0.1.0-windows-x64.zip
-.\takeout-helper-gphotos-v0.1.0-windows-x64\takeout-helper-gphotos.exe --version
+Expand-Archive .\takeout-helper-gphotos-vX.Y.Z-windows-x64.zip
+.\takeout-helper-gphotos-vX.Y.Z-windows-x64\takeout-helper-gphotos.exe --version
 ```
 
 Linux x64:
 
 ```bash
-tar -xzf takeout-helper-gphotos-v0.1.0-linux-x64.tar.gz
-./takeout-helper-gphotos-v0.1.0-linux-x64/takeout-helper-gphotos --version
+tar -xzf takeout-helper-gphotos-vX.Y.Z-linux-x64.tar.gz
+./takeout-helper-gphotos-vX.Y.Z-linux-x64/takeout-helper-gphotos --version
 ```
 
 macOS Apple Silicon:
 
 ```bash
-tar -xzf takeout-helper-gphotos-v0.1.0-macos-arm64.tar.gz
-./takeout-helper-gphotos-v0.1.0-macos-arm64/takeout-helper-gphotos --version
+tar -xzf takeout-helper-gphotos-vX.Y.Z-macos-arm64.tar.gz
+./takeout-helper-gphotos-vX.Y.Z-macos-arm64/takeout-helper-gphotos --version
 ```
 
 The binaries are not currently code signed. Windows SmartScreen or macOS

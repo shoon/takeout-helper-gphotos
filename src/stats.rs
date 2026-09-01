@@ -12,6 +12,9 @@
 
 use std::path::PathBuf;
 
+/// Project funding page shown after a successful real run.
+pub const SPONSOR_URL: &str = "https://github.com/sponsors/shoon";
+
 /// Struct to hold statistics for the summary report.
 ///
 /// The counters are grouped by pipeline phase, in the order the phases run.
@@ -196,6 +199,13 @@ fn undated_output_lines(stats: &ProcessingStats) -> Vec<String> {
     lines
 }
 
+/// A funding link is appropriate only after the tool completed useful work
+/// without failures. Asking after an error, interruption, or dry run would be
+/// distracting when the user needs to review or retry the run instead.
+fn show_sponsor_prompt(stats: &ProcessingStats) -> bool {
+    !stats.dry_run && !stats.interrupted && !stats.has_failures() && stats.archives_extracted > 0
+}
+
 /// Generate the end-of-run summary report.
 ///
 /// The report names the output directory, calls out failures prominently and
@@ -365,7 +375,14 @@ pub fn generate_summary(stats: &ProcessingStats) {
     } else if !stats.interrupted {
         println!("\nNo failures.");
     }
-    println!("{}\n", rule);
+    println!("{}", rule);
+    if show_sponsor_prompt(stats) {
+        println!(
+            "\nIf this tool helped, support its development: {}",
+            SPONSOR_URL
+        );
+    }
+    println!();
 }
 
 #[cfg(test)]
@@ -477,5 +494,35 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs_f64(3.42)), "3.4s");
         assert_eq!(format_duration(Duration::from_secs(125)), "2m 05s");
         assert_eq!(format_duration(Duration::from_secs(3725)), "1h 02m 05s");
+    }
+
+    #[test]
+    fn sponsor_prompt_follows_only_successful_real_runs() {
+        let successful = ProcessingStats {
+            archives_extracted: 1,
+            ..Default::default()
+        };
+        assert!(show_sponsor_prompt(&successful));
+
+        for stats in [
+            ProcessingStats::default(),
+            ProcessingStats {
+                archives_extracted: 1,
+                dry_run: true,
+                ..Default::default()
+            },
+            ProcessingStats {
+                archives_extracted: 1,
+                interrupted: true,
+                ..Default::default()
+            },
+            ProcessingStats {
+                archives_extracted: 1,
+                organize_failures: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(!show_sponsor_prompt(&stats));
+        }
     }
 }

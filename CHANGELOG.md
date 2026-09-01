@@ -5,6 +5,13 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-01
+
+- Print one GitHub Sponsors link after successful real runs, while keeping it
+  out of dry-run, interrupted, empty-input, and failure summaries.
+- Document installation through the `shoon/tap` Homebrew tap and the `shoon`
+  Scoop bucket alongside manual release downloads.
+
 ## [0.1.1] - 2026-09-01
 
 - Extract parallel Takeout shards into isolated scratch subtrees so repeated
@@ -61,6 +68,7 @@ Initial public release.
 - Add cross-platform release archives, checksums, dependency auditing, security
   policy, focused documentation, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shoon/takeout-helper-gphotos/releases/tag/v0.1.0

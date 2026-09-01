@@ -5,7 +5,7 @@ takeout-helper-gphotos --input <DIR> --output <DIR> [OPTIONS]
 ```
 
 `--input` and `--output` are required named flags. Values shown as defaults
-below describe version 0.1.0.
+below describe the current release.
 
 ## Required paths
 
