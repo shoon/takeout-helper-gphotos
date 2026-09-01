@@ -5,6 +5,8 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-01
+
 - Extract parallel Takeout shards into isolated scratch subtrees so repeated
   paths cannot race and every media file stays with the sidecar from its own
   shard; repeated names within one archive are still preserved as numbered
@@ -59,5 +61,6 @@ Initial public release.
 - Add cross-platform release archives, checksums, dependency auditing, security
   policy, focused documentation, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/shoon/takeout-helper-gphotos/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shoon/takeout-helper-gphotos/releases/tag/v0.1.0
