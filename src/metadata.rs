@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
 // Import the stats module to access ProcessingStats
@@ -26,10 +26,15 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
 ];
 
 /// Extensions treated as the "photo half" of a Live Photo / motion photo pair.
-const LIVE_PHOTO_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "jpg", "jpeg", "png"];
+///
+/// Shared with the Live Photo date map in `app` so sidecar pairing and date
+/// borrowing cannot drift apart.
+pub const LIVE_PHOTO_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "jpg", "jpeg", "png"];
 
 /// Extensions treated as the "video half" of a Live Photo / motion photo pair.
-const LIVE_PHOTO_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "3gp"];
+///
+/// Shared with date resolution in `organizer` for the same reason.
+pub const LIVE_PHOTO_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "3gp"];
 
 /// Localized variants of the `-edited` suffix Google appends to edited copies.
 ///
@@ -391,8 +396,26 @@ fn is_non_album_folder(folder: &str) -> bool {
 /// one of Google's buckets, or has no parent folder to speak of.
 pub fn extract_album_name(path: &Path, extract_root: &Path) -> Option<String> {
     let relative = path.strip_prefix(extract_root).ok()?;
+    // Batched extraction keeps every archive in
+    // `<internal-batch>/<shard>/...`. Remove that implementation detail before
+    // deciding whether the media's real parent is a user album. In particular,
+    // a file at an archive's root must not acquire a fake numeric album name.
+    let logical_relative = {
+        let mut components = relative.components();
+        match components.next() {
+            Some(Component::Normal(first))
+                if first
+                    .to_string_lossy()
+                    .starts_with(crate::archive::ARCHIVE_BATCH_DIR_PREFIX) =>
+            {
+                components.next()?;
+                components.as_path().to_path_buf()
+            }
+            _ => relative.to_path_buf(),
+        }
+    };
     // Need at least `<folder>/file.ext`.
-    let parent = relative.parent()?;
+    let parent = logical_relative.parent()?;
     let folder = parent.file_name()?.to_string_lossy().to_string();
 
     if is_non_album_folder(&folder) {
@@ -1026,6 +1049,18 @@ mod tests {
         assert!(is_housekeeping_json("metadata.json"));
         assert!(is_housekeeping_json("print-subscriptions.json"));
         assert!(!is_housekeeping_json("IMG_0001.jpg.json"));
+    }
+
+    #[test]
+    fn archive_isolation_directories_are_not_albums() {
+        let root = Path::new("scratch");
+        let wrapper = root.join("takeout-helper-archives-AbCd1234").join("000001");
+
+        assert_eq!(
+            extract_album_name(&wrapper.join("Holiday/photo.jpg"), root),
+            Some("Holiday".to_string())
+        );
+        assert_eq!(extract_album_name(&wrapper.join("photo.jpg"), root), None);
     }
 
     #[test]

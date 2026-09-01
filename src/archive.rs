@@ -17,6 +17,7 @@ use rayon::prelude::*;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tar::Archive;
 use walkdir::WalkDir;
 use zip::ZipArchive;
@@ -46,6 +47,12 @@ const MAX_DEPTH: usize = 100;
 
 /// How often (in entries) long extraction loops sample the shutdown flag.
 const SHUTDOWN_POLL_INTERVAL: usize = 32;
+
+/// Cap on the `_N` rename loop for entry paths repeated within one archive.
+const MAX_ENTRY_NAME_ATTEMPTS: u32 = 10_000;
+
+/// Prefix for the per-batch directory that keeps parallel archive trees apart.
+pub(crate) const ARCHIVE_BATCH_DIR_PREFIX: &str = "takeout-helper-archives-";
 
 /// Prefix used for every scratch directory this crate creates and deletes.
 ///
@@ -300,6 +307,86 @@ fn check_disk_space(extract_dir: &Path, required_space: u64) -> Result<(), Archi
     Ok(())
 }
 
+/// Outstanding disk-space reservations shared by one batch of parallel
+/// extractions.
+///
+/// `statvfs` only reflects bytes already written, so when several large shards
+/// start at the same moment each one alone can pass the pre-flight space check
+/// while their combined totals cannot fit. Every archive therefore reserves
+/// its declared total up front and hands the reservation back byte by byte as
+/// data reaches disk, keeping later checks honest about what is still free.
+#[derive(Default)]
+struct SpacePool {
+    outstanding: AtomicU64,
+}
+
+impl SpacePool {
+    /// Atomically add a reservation without letting concurrent admissions
+    /// exceed the free-space snapshot used by this caller.
+    fn reserve(&self, available: u64, bytes: u64) -> Result<(), u64> {
+        self.outstanding
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |outstanding| {
+                (available.saturating_sub(outstanding) >= bytes)
+                    .then(|| outstanding.saturating_add(bytes))
+            })
+            .map(|_| ())
+    }
+}
+
+/// One archive's share of a [`SpacePool`]; the unwritten remainder is released
+/// when the extraction ends, however it ends.
+struct SpaceReservation<'a> {
+    pool: Option<&'a SpacePool>,
+    remaining: u64,
+}
+
+impl<'a> SpaceReservation<'a> {
+    /// Check free space and, when a pool is shared, reserve `bytes` in it.
+    fn take(
+        pool: Option<&'a SpacePool>,
+        extract_dir: &Path,
+        bytes: u64,
+    ) -> Result<Self, ArchiveError> {
+        let Some(pool) = pool else {
+            check_disk_space(extract_dir, bytes)?;
+            return Ok(SpaceReservation {
+                pool: None,
+                remaining: 0,
+            });
+        };
+
+        let available = get_available_disk_space(extract_dir)?;
+        if let Err(outstanding) = pool.reserve(available, bytes) {
+            return Err(ArchiveError::LimitExceeded(format!(
+                "Insufficient disk space: {} bytes available, {} bytes reserved by other \
+                 archives, {} bytes required",
+                available, outstanding, bytes
+            )));
+        }
+        Ok(SpaceReservation {
+            pool: Some(pool),
+            remaining: bytes,
+        })
+    }
+
+    /// Bytes now on disk are visible to `statvfs` and stop being a reservation.
+    fn consume(&mut self, bytes: u64) {
+        let written = bytes.min(self.remaining);
+        self.remaining -= written;
+        if let Some(pool) = self.pool {
+            pool.outstanding.fetch_sub(written, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for SpaceReservation<'_> {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool {
+            pool.outstanding.fetch_sub(self.remaining, Ordering::SeqCst);
+        }
+    }
+}
+
 /// Bail out of an extraction loop if the user pressed Ctrl+C.
 fn check_shutdown(index: usize) -> Result<(), ArchiveError> {
     if index.is_multiple_of(SHUTDOWN_POLL_INTERVAL) && crate::is_shutdown() {
@@ -321,6 +408,89 @@ fn zip_datetime_to_filetime(dt: &zip::DateTime) -> Option<FileTime> {
         u32::from(dt.second()),
     )?;
     Some(FileTime::from_unix_time(naive.and_utc().timestamp(), 0))
+}
+
+/// Open a brand-new output file for an archive entry, never truncating one
+/// that already exists.
+///
+/// A malformed archive can contain the same entry name more than once. A
+/// truncating create would silently destroy the first entry, so the name is
+/// claimed atomically with `create_new` and a repeated entry goes to a `_N`
+/// sibling. Separate archives are extracted into isolated subtrees by
+/// [`extract_archives`], which also keeps a media file beside the sidecar from
+/// the same shard.
+fn create_new_entry_file(outpath: &Path) -> Result<(fs::File, PathBuf), ArchiveError> {
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(outpath)
+    {
+        Ok(file) => return Ok((file, outpath.to_path_buf())),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(ArchiveError::Io(e)),
+    }
+
+    let stem = outpath
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let extension = outpath.extension().map(|e| e.to_string_lossy().to_string());
+    let dir = outpath.parent().unwrap_or(Path::new("")).to_path_buf();
+
+    for counter in 1..=MAX_ENTRY_NAME_ATTEMPTS {
+        let name = match &extension {
+            Some(ext) => format!("{}_{}.{}", stem, counter, ext),
+            None => format!("{}_{}", stem, counter),
+        };
+        let candidate = dir.join(name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                debug!(
+                    "Entry path {} was already extracted (another shard shares it); writing {}",
+                    outpath.display(),
+                    candidate.display()
+                );
+                return Ok((file, candidate));
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(ArchiveError::Io(e)),
+        }
+    }
+
+    Err(ArchiveError::Other(format!(
+        "Could not find a free name for archive entry {}",
+        outpath.display()
+    )))
+}
+
+/// Create a private root for one call to [`extract_archives`]. Each archive is
+/// then assigned a child of this directory, so paths repeated across shards
+/// cannot collide and companion files cannot be paired across shards.
+fn create_archive_batch_dir(base: &Path) -> Result<PathBuf, ArchiveError> {
+    fs::create_dir_all(base)?;
+
+    for _ in 0..32 {
+        let random_string: String = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(16)
+            .map(char::from)
+            .collect();
+        let candidate = base.join(format!("{}{}", ARCHIVE_BATCH_DIR_PREFIX, random_string));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(ArchiveError::Io(e)),
+        }
+    }
+
+    Err(ArchiveError::Other(format!(
+        "Could not create an isolated archive batch directory inside {}",
+        base.display()
+    )))
 }
 
 /// Apply an entry's modification time to the extracted file.
@@ -561,6 +731,7 @@ pub fn extract_single_archive(
         extract_dir,
         Limits::new(max_file_size, max_archive_size, max_files),
         &pb,
+        None,
     );
     pb.finish_and_clear();
     result
@@ -571,6 +742,7 @@ fn extract_zip_inner(
     extract_dir: &Path,
     limits: Limits,
     pb: &ProgressBar,
+    space_pool: Option<&SpacePool>,
 ) -> Result<ExtractionSummary, ArchiveError> {
     debug!("Extracting archive: {}", zip_path.display());
 
@@ -618,7 +790,7 @@ fn extract_zip_inner(
         )));
     }
 
-    check_disk_space(extract_dir, declared_total)?;
+    let mut reservation = SpaceReservation::take(space_pool, extract_dir, declared_total)?;
 
     let base = canonical_base(extract_dir)?;
 
@@ -679,11 +851,13 @@ fn extract_zip_inner(
 
         // Enforce the per-file limit against bytes actually written, not the
         // attacker-declared size in the header.
-        let written = {
-            let mut outfile = fs::File::create(&outpath)?;
+        let (outpath, written) = {
+            let (mut outfile, outpath) = create_new_entry_file(&outpath)?;
             let mut limited = (&mut entry).take(max_file_size.saturating_add(1));
-            io::copy(&mut limited, &mut outfile)?
+            let written = io::copy(&mut limited, &mut outfile)?;
+            (outpath, written)
         };
+        reservation.consume(written);
 
         if written > max_file_size {
             warn!(
@@ -730,6 +904,7 @@ pub fn extract_single_tgz_archive(
         extract_dir,
         Limits::new(max_file_size, max_archive_size, max_files),
         &pb,
+        None,
     );
     pb.finish_and_clear();
     result
@@ -740,6 +915,7 @@ fn extract_tgz_inner(
     extract_dir: &Path,
     limits: Limits,
     pb: &ProgressBar,
+    space_pool: Option<&SpacePool>,
 ) -> Result<ExtractionSummary, ArchiveError> {
     debug!("Extracting TGZ archive: {}", tgz_path.display());
 
@@ -747,7 +923,7 @@ fn extract_tgz_inner(
     // pre-flight check is that we have at least the compressed size
     // available. Cumulative limits are enforced as we go.
     let compressed_len = fs::metadata(tgz_path)?.len();
-    check_disk_space(extract_dir, compressed_len)?;
+    let mut reservation = SpaceReservation::take(space_pool, extract_dir, compressed_len)?;
 
     let base = canonical_base(extract_dir)?;
 
@@ -833,11 +1009,13 @@ fn extract_tgz_inner(
             fs::create_dir_all(parent)?;
         }
 
-        let written = {
-            let mut outfile = fs::File::create(&outpath)?;
+        let (outpath, written) = {
+            let (mut outfile, outpath) = create_new_entry_file(&outpath)?;
             let mut limited = (&mut entry).take(max_file_size.saturating_add(1));
-            io::copy(&mut limited, &mut outfile)?
+            let written = io::copy(&mut limited, &mut outfile)?;
+            (outpath, written)
         };
+        reservation.consume(written);
 
         if written > max_file_size {
             warn!(
@@ -897,7 +1075,13 @@ pub fn extract_single_archive_auto(
     }
 }
 
-/// Extract all archives into `temp_dir`, in parallel.
+/// Extract all archives beneath `temp_dir`, in parallel.
+///
+/// Every archive gets an isolated subtree. Takeout shards can repeat logical
+/// paths, including album `metadata.json`; isolation prevents concurrent
+/// writers from racing and preserves each media file's relationship with the
+/// sidecar from the same shard. Callers should discover extracted files
+/// recursively beneath `temp_dir`.
 ///
 /// Returns one entry per input archive, in the input order, so the caller can
 /// report which shards succeeded and which did not. Errors are **not**
@@ -919,7 +1103,21 @@ pub fn extract_archives(
         return Vec::new();
     }
 
+    let batch_dir = match create_archive_batch_dir(temp_dir) {
+        Ok(path) => path,
+        Err(e) => {
+            let detail = format!("Could not prepare isolated archive extraction: {}", e);
+            return archive_files
+                .into_iter()
+                .map(|path| (path, Err(ArchiveError::Other(detail.clone()))))
+                .collect();
+        }
+    };
+
     let limits = Limits::new(max_file_size, max_archive_size, max_files);
+    // Shared between the parallel extractions so their pre-flight disk-space
+    // checks account for each other's declared totals.
+    let space_pool = SpacePool::default();
 
     // A TGZ stream does not expose its final entry count up front. One shared
     // spinner therefore reports aggregate activity across every parallel
@@ -934,19 +1132,31 @@ pub fn extract_archives(
 
     let results: Vec<(PathBuf, Result<ExtractionSummary, ArchiveError>)> = archive_files
         .into_par_iter()
-        .map(|archive_file| {
-            let result = match classify_archive(&archive_file) {
-                Some(ArchiveKind::Zip) => {
-                    extract_zip_inner(&archive_file, temp_dir, limits, &extraction_pb)
-                }
-                Some(ArchiveKind::Tgz) => {
-                    extract_tgz_inner(&archive_file, temp_dir, limits, &extraction_pb)
-                }
-                None => Err(ArchiveError::Other(format!(
-                    "Unsupported archive format: {}",
-                    archive_file.display()
-                ))),
-            };
+        .enumerate()
+        .map(|(index, archive_file)| {
+            let shard_dir = batch_dir.join(format!("{:06}", index + 1));
+            let result = fs::create_dir(&shard_dir)
+                .map_err(ArchiveError::Io)
+                .and_then(|()| match classify_archive(&archive_file) {
+                    Some(ArchiveKind::Zip) => extract_zip_inner(
+                        &archive_file,
+                        &shard_dir,
+                        limits,
+                        &extraction_pb,
+                        Some(&space_pool),
+                    ),
+                    Some(ArchiveKind::Tgz) => extract_tgz_inner(
+                        &archive_file,
+                        &shard_dir,
+                        limits,
+                        &extraction_pb,
+                        Some(&space_pool),
+                    ),
+                    None => Err(ArchiveError::Other(format!(
+                        "Unsupported archive format: {}",
+                        archive_file.display()
+                    ))),
+                });
 
             match &result {
                 Ok(summary) => info!(
@@ -1363,6 +1573,105 @@ mod tests {
             "takeout-20240101T000000Z-003.zip",
         ]));
         report_split_archives(&groups);
+    }
+
+    /// Two shards carrying the same entry path must both survive extraction
+    /// into one scratch tree, with neither file truncated or interleaved.
+    #[test]
+    fn test_colliding_entry_paths_never_truncate() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let extract_dir = temp_dir.path().join("scratch");
+        fs::create_dir(&extract_dir).unwrap();
+
+        for (archive_name, contents) in [("shard-a.zip", "first shard"), ("shard-b.zip", "second")]
+        {
+            let archive_path = temp_dir.path().join(archive_name);
+            let mut zip = zip::ZipWriter::new(fs::File::create(&archive_path).unwrap());
+            zip.start_file("Takeout/Album/metadata.json", SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(contents.as_bytes()).unwrap();
+            zip.finish().unwrap();
+
+            let summary =
+                extract_single_archive(&archive_path, &extract_dir, None, None, None).unwrap();
+            assert_eq!(summary.files_extracted, 1);
+        }
+
+        let album = extract_dir.join("Takeout/Album");
+        assert_eq!(
+            fs::read_to_string(album.join("metadata.json")).unwrap(),
+            "first shard"
+        );
+        assert_eq!(
+            fs::read_to_string(album.join("metadata_1.json")).unwrap(),
+            "second"
+        );
+    }
+
+    /// Reservations must be checked jointly, consumed as bytes land on disk,
+    /// and released when an extraction ends.
+    #[test]
+    fn test_space_pool_accounting() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let pool = SpacePool::default();
+
+        let mut first = SpaceReservation::take(Some(&pool), temp_dir.path(), 100).unwrap();
+        assert_eq!(pool.outstanding.load(Ordering::SeqCst), 100);
+
+        first.consume(30);
+        assert_eq!(pool.outstanding.load(Ordering::SeqCst), 70);
+        // Consuming more than was reserved must saturate, not underflow.
+        first.consume(1000);
+        assert_eq!(pool.outstanding.load(Ordering::SeqCst), 0);
+        drop(first);
+        assert_eq!(pool.outstanding.load(Ordering::SeqCst), 0);
+
+        let second = SpaceReservation::take(Some(&pool), temp_dir.path(), 50).unwrap();
+        drop(second);
+        assert_eq!(pool.outstanding.load(Ordering::SeqCst), 0);
+
+        // A pool holding everything statvfs reports as free must refuse more.
+        let available = get_available_disk_space(temp_dir.path()).unwrap();
+        pool.outstanding.store(available, Ordering::SeqCst);
+        let refused = SpaceReservation::take(Some(&pool), temp_dir.path(), 1);
+        assert!(matches!(refused, Err(ArchiveError::LimitExceeded(_))));
+        assert_eq!(
+            pool.outstanding.load(Ordering::SeqCst),
+            available,
+            "a refused reservation must not change the pool"
+        );
+    }
+
+    /// Concurrent admissions must not all pass against the same outstanding
+    /// value. At most one 60-byte reservation fits in a 100-byte snapshot.
+    #[test]
+    fn test_space_pool_admission_is_atomic() {
+        use std::sync::{Arc, Barrier};
+
+        let pool = Arc::new(SpacePool::default());
+        let barrier = Arc::new(Barrier::new(16));
+        let admitted: usize = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    let pool = Arc::clone(&pool);
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        pool.reserve(100, 60).is_ok()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| usize::from(handle.join().unwrap()))
+                .sum()
+        });
+
+        assert_eq!(admitted, 1);
+        assert_eq!(pool.outstanding.load(Ordering::SeqCst), 60);
     }
 
     #[test]

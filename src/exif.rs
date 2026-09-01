@@ -359,15 +359,31 @@ fn write_metadata_to_file_detailed(
 
     // Set the modification time last because anything that rewrites the file above
     // would otherwise reset it to "now".
-    set_file_modification_time(media_path, metadata)?;
+    let mtime_result = set_file_modification_time(media_path, metadata);
 
-    match exif_error {
-        Some(e) => Err(e),
-        None => Ok(DetailedWriteOutcome {
-            outcome,
-            fresh_exif_block,
-        }),
+    if let Some(e) = exif_error {
+        return Err(e);
     }
+
+    if let Err(e) = mtime_result {
+        if outcome == ExifWriteOutcome::MtimeOnly {
+            // Correcting the mtime was the only work attempted, so its
+            // failure is the file's failure.
+            return Err(e);
+        }
+        // The date is already inside the file. Reporting the whole write as
+        // failed over a follow-up mtime touch-up would be misleading.
+        warn!(
+            "Wrote metadata into {} but could not set its modification time: {}",
+            media_path.display(),
+            e
+        );
+    }
+
+    Ok(DetailedWriteOutcome {
+        outcome,
+        fresh_exif_block,
+    })
 }
 
 /// The sidecar's `photoTakenTime` as a Unix timestamp, if it parses.

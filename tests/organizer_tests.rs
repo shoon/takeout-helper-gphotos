@@ -1034,7 +1034,8 @@ fn test_manifest_resume_skips_already_organized_content() {
 
     let manifest = manifest_from(&first, out.path());
 
-    // Second pass with the manifest: skipped without resolving the date at all.
+    // Second pass with the manifest: bytes are skipped, but the date is still
+    // resolved so reporting remains accurate.
     let resume = OrganizeOptions {
         record_manifest: true,
         resume: Some(&manifest),
@@ -1051,6 +1052,48 @@ fn test_manifest_resume_skips_already_organized_content() {
     assert_eq!(forced.resumed_skips, 0);
     assert_eq!(forced.duplicates_skipped, 1);
     assert_eq!(forced.organized, 0);
+}
+
+/// Resuming an undated file must keep it in the attention report. Otherwise a
+/// clean second run can delete the only CSV row that tells the user to review it.
+#[test]
+fn test_manifest_resume_keeps_undated_file_in_summary() {
+    mark_run_start();
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let media = src.path().join("undated.jpg");
+    std::fs::write(&media, "photo bytes").unwrap();
+
+    let options = OrganizeOptions {
+        record_manifest: true,
+        ..Default::default()
+    };
+    let first = organize(
+        vec![MediaMetadataPair::WithoutMetadata(media.clone())],
+        out.path(),
+        &options,
+    );
+    assert_eq!(first.unknown_date, 1);
+    assert_eq!(first.undated.len(), 1);
+
+    let manifest = manifest_from(&first, out.path());
+    let resume = OrganizeOptions {
+        record_manifest: true,
+        resume: Some(&manifest),
+        ..Default::default()
+    };
+    let second = organize(
+        vec![MediaMetadataPair::WithoutMetadata(media.clone())],
+        out.path(),
+        &resume,
+    );
+
+    assert_eq!(second.resumed_skips, 1);
+    assert_eq!(second.unknown_date, 1);
+    assert_eq!(
+        second.undated,
+        vec![(media, out.path().join("unknown-date").join("undated.jpg"))]
+    );
 }
 
 /// A manifest entry whose output file has been deleted must not skip the file.
