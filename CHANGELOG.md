@@ -19,6 +19,10 @@ All notable changes to this project will be documented here. Releases follow
 - Update the release workflow's upload-artifact (7.0.2) and download-artifact
   (8.0.2) actions.
 - Refresh third-party notices for the updated dependency set.
+- Allow publishing a release by running the Release workflow manually on
+  `main`; it tags the Cargo version after all builds succeed.
+- Replace `AtomicU64::fetch_update`, deprecated on current stable Rust, with
+  an equivalent compare-exchange loop.
 
 ## [0.1.3] - 2026-09-23
 

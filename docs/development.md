@@ -124,6 +124,13 @@ Before tagging:
 2. regenerate third-party notices;
 3. run the complete local check set;
 4. confirm `main` CI and the dependency audit pass; and
-5. create and push a signed or annotated `vX.Y.Z` tag.
+5. either create and push a signed or annotated `vX.Y.Z` tag, or run the
+   **Release** workflow manually on `main` (Actions → Release → Run workflow,
+   or `gh workflow run release.yml --ref main`).
+
+A manual run releases the version in `Cargo.toml`. It refuses to run if that
+tag already exists or `CHANGELOG.md` has no matching section, runs the same
+verification and builds, and creates the annotated tag on the built commit
+only after every platform build succeeds.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for DCO and data-safety requirements.
