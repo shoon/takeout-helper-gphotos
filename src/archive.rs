@@ -324,12 +324,23 @@ impl SpacePool {
     /// Atomically add a reservation without letting concurrent admissions
     /// exceed the free-space snapshot used by this caller.
     fn reserve(&self, available: u64, bytes: u64) -> Result<(), u64> {
-        self.outstanding
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |outstanding| {
-                (available.saturating_sub(outstanding) >= bytes)
-                    .then(|| outstanding.saturating_add(bytes))
-            })
-            .map(|_| ())
+        // A compare-exchange loop rather than `fetch_update`, which newer
+        // toolchains deprecate in favor of `try_update` (unavailable on MSRV).
+        let mut outstanding = self.outstanding.load(Ordering::SeqCst);
+        loop {
+            if available.saturating_sub(outstanding) < bytes {
+                return Err(outstanding);
+            }
+            match self.outstanding.compare_exchange_weak(
+                outstanding,
+                outstanding.saturating_add(bytes),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(current) => outstanding = current,
+            }
+        }
     }
 }
 
@@ -773,7 +784,7 @@ fn extract_zip_inner(
             if ratio > MAX_COMPRESSION_RATIO {
                 warn!(
                     "High compression ratio detected for {}: {}:1 ({} -> {})",
-                    entry.name(),
+                    String::from_utf8_lossy(entry.name_raw()),
                     ratio,
                     compressed,
                     uncompressed
@@ -804,7 +815,19 @@ fn extract_zip_inner(
         summary.entries_seen += 1;
         pb.inc(1);
 
-        let name = entry.name().to_string();
+        let name = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(e) => {
+                warn!(
+                    "Skipping entry with undecodable name in {}: {} ({})",
+                    zip_path.display(),
+                    String::from_utf8_lossy(entry.name_raw()),
+                    e
+                );
+                summary.skipped_unsafe += 1;
+                continue;
+            }
+        };
 
         if !is_safe_path(&name) {
             warn!("Skipping unsafe entry in {}: {}", zip_path.display(), name);

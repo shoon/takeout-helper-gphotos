@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+  # Manual releases: run this workflow on `main` to tag and publish the version
+  # in Cargo.toml. The tag is created only after every build succeeds.
   workflow_dispatch:
 
 permissions:
@@ -16,9 +18,11 @@ concurrency:
 jobs:
   verify:
     name: Verify release inputs
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - name: Check out source
@@ -31,11 +35,31 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
 
-      - name: Verify tag matches Cargo version
+      - name: Resolve release tag from Cargo version
+        id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "takeout-helper-gphotos") | .version')"
-          test "$GITHUB_REF_NAME" = "v$version"
+          tag="v$version"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match Cargo version $version"
+              exit 1
+            fi
+          else
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::Tag $tag already exists; bump the version in Cargo.toml first"
+              exit 1
+            fi
+          fi
+          if ! grep -qF "## [$version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no ## [$version] section"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Check format, tests, and lint
         run: |
@@ -57,6 +81,8 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}
     needs: verify
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -111,7 +137,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base="takeout-helper-gphotos-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          base="takeout-helper-gphotos-${RELEASE_TAG}-${{ matrix.platform }}"
           package="dist/$base"
           mkdir -p "$package/docs" "$package/third-party/little_exif"
           cp "target/${{ matrix.target }}/release/takeout-helper-gphotos" "$package/"
@@ -125,7 +151,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $base = "takeout-helper-gphotos-$env:GITHUB_REF_NAME-${{ matrix.platform }}"
+          $base = "takeout-helper-gphotos-$env:RELEASE_TAG-${{ matrix.platform }}"
           $package = Join-Path "dist" $base
           $docs = Join-Path $package "docs"
           $thirdParty = Join-Path $package "third-party\little_exif"
@@ -137,9 +163,9 @@ jobs:
           Compress-Archive -Path "$package\*" -DestinationPath "dist\$base.zip" -CompressionLevel Optimal
 
       - name: Upload packaged release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: takeout-helper-gphotos-${{ github.ref_name }}-${{ matrix.platform }}
+          name: takeout-helper-gphotos-${{ needs.verify.outputs.tag }}-${{ matrix.platform }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -148,16 +174,18 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: build
+    needs: [verify, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
 
     steps:
       - name: Download release archives
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
-          pattern: takeout-helper-gphotos-${{ github.ref_name }}-*
+          pattern: takeout-helper-gphotos-${{ needs.verify.outputs.tag }}-*
           merge-multiple: true
 
       - name: Create checksums
@@ -166,14 +194,31 @@ jobs:
           cd dist
           sha256sum *.tar.gz *.zip > SHA256SUMS.txt
 
+      - name: Create annotated tag for manual release
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f tag="$RELEASE_TAG" \
+            -f message="Release $RELEASE_TAG" \
+            -f object="$GITHUB_SHA" \
+            -f type=commit \
+            --jq .sha)"
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$RELEASE_TAG" \
+            -f sha="$tag_sha" >/dev/null
+
       - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
             dist/*.tar.gz dist/*.zip dist/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Takeout Helper for Google Photos $GITHUB_REF_NAME" \
+            --title "Takeout Helper for Google Photos $RELEASE_TAG" \
             --generate-notes \
             --verify-tag
