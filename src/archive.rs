@@ -773,7 +773,7 @@ fn extract_zip_inner(
             if ratio > MAX_COMPRESSION_RATIO {
                 warn!(
                     "High compression ratio detected for {}: {}:1 ({} -> {})",
-                    entry.name(),
+                    String::from_utf8_lossy(entry.name_raw()),
                     ratio,
                     compressed,
                     uncompressed
@@ -804,7 +804,19 @@ fn extract_zip_inner(
         summary.entries_seen += 1;
         pb.inc(1);
 
-        let name = entry.name().to_string();
+        let name = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(e) => {
+                warn!(
+                    "Skipping entry with undecodable name in {}: {} ({})",
+                    zip_path.display(),
+                    String::from_utf8_lossy(entry.name_raw()),
+                    e
+                );
+                summary.skipped_unsafe += 1;
+                continue;
+            }
+        };
 
         if !is_safe_path(&name) {
             warn!("Skipping unsafe entry in {}: {}", zip_path.display(), name);

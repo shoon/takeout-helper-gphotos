@@ -5,6 +5,21 @@ All notable changes to this project will be documented here. Releases follow
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-31
+
+- Update zip to 9.2.0, resolving RUSTSEC-2026-0367, RUSTSEC-2026-0368, and
+  RUSTSEC-2026-0369, and pulling in zstd 0.14.3, zstd-safe 8.2.0, and
+  zstd-sys 2.1.2, which resolve RUSTSEC-2026-0391, RUSTSEC-2026-0398,
+  RUSTSEC-2026-0403, and RUSTSEC-2026-0410.
+- Update ctutils to 0.4.7, resolving RUSTSEC-2026-0385.
+- Skip and report Zip entries whose names cannot be decoded instead of
+  aborting the archive.
+- Update tzf-rs to 2.1.3 and its bundled timezone boundary data.
+- Update serde_json to 1.0.154, rand to 0.10.3, and thiserror to 2.0.21.
+- Update the release workflow's upload-artifact (7.0.2) and download-artifact
+  (8.0.2) actions.
+- Refresh third-party notices for the updated dependency set.
+
 ## [0.1.3] - 2026-09-23
 
 - Update tzf-rs to 2.1.2 and its bundled timezone boundary data.
