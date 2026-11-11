@@ -434,7 +434,11 @@ pub fn is_media_extension(ext: &str) -> bool {
 
 /// True when `name` (any case) ends in `.json`.
 fn is_json_name(name: &str) -> bool {
-    name.len() >= 5 && name[name.len() - 5..].eq_ignore_ascii_case(".json")
+    // `name.len() - 5` is only a valid slice start when it falls on a char
+    // boundary; a name that really ends in `.json` always satisfies that.
+    name.len() >= 5
+        && name.is_char_boundary(name.len() - 5)
+        && name[name.len() - 5..].eq_ignore_ascii_case(".json")
 }
 
 /// True when `name` is a Takeout housekeeping JSON rather than a media sidecar.
@@ -1026,6 +1030,15 @@ mod tests {
     #[test]
     fn rejects_non_json() {
         assert!(derive_sidecar_target("IMG_0001.jpg").is_none());
+    }
+
+    #[test]
+    fn rejects_multibyte_non_json_names_without_panicking() {
+        // `name.len() - 5` can land inside a multi-byte character; the name
+        // must be rejected instead of panicking on the slice.
+        assert!(derive_sidecar_target("фотоабвге").is_none());
+        assert!(!is_json_name("фотоабвге"));
+        assert_eq!(derive("фото.json"), ("фото".to_string(), None));
     }
 
     #[test]
